@@ -1,5 +1,33 @@
 services:
+  postgres:
+    image: 'postgres:18'
+    environment:
+      POSTGRES_DB: ladder
+      POSTGRES_USER: ladder
+      POSTGRES_PASSWORD: ladder
+    ports:
+      - '5432'
+  rabbitmq:
+    image: 'rabbitmq:4-management'
+    ports:
+      - '5672'
+      - '15672'
   redis:
-    image: 'redis:latest'
+    image: 'redis:8'
     ports:
       - '6379'
+  storage:
+    image: 'rustfs/rustfs:latest'
+    environment:
+      RUSTFS_ACCESS_KEY: ladder
+      RUSTFS_SECRET_KEY: ladder-secret
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - storage-data:/data
+
+volumes:
+  storage-data:
+
+  
