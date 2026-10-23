@@ -4,7 +4,8 @@ An adaptive-bitrate video platform, built to understand how one actually works.
 
 A *bitrate ladder* is the set of encoded renditions a video is transcoded into — 1080p, 720p, 480p, 240p — so a player can step up or down the rungs as network conditions change. That mechanism is the core of this project, and the reason for its name.
 
-**Status: design phase.** The schema below is written; the services are not. This README documents the design and the reasoning behind it. Claims are marked as *designed* or *built* — nothing is marked built until it is, and until there's something to point at.
+**Status: building.** Upload → transcode works end to end: a video goes in, four HLS renditions come out in object storage. Playback, auth and everything around them are not built yet. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
+
 ---
 
 ## What it does
@@ -21,11 +22,11 @@ Each of these was a fork in the road. The reasoning matters more than the choice
 
 ### Bytes live in object storage; the database stores pointers
 
-`video_resolutions.object_storage_path` holds a MinIO/S3 key. The video bytes never touch Postgres.
+`video_resolutions.object_storage_path` holds an S3 key. The video bytes never touch Postgres.
 
 Three reasons. Multi-GB blobs inside the database bloat every backup and replication stream. Object storage supports HTTP range requests natively, which is exactly what segment-by-segment playback needs and what a BLOB column is bad at. And it keeps the database fast at the thing it's good at — querying metadata — instead of being a slow file server.
 
-*Designed.*
+*Built* — key layout in [`StorageKeys`](src/main/java/com/ladder/storage/StorageKeys.java); the worker uploads segments and records the playlist key.
 
 ### One row per rendition, not per segment
 
@@ -33,7 +34,41 @@ Three reasons. Multi-GB blobs inside the database bloat every backup and replica
 
 The database answers "which renditions exist and where do they start"; the manifest answers "which segments make up this rendition". Putting segment enumeration in both places means keeping them in sync forever.
 
-*Designed.*
+*Built* — [`VideoResolutionRepository`](src/main/java/com/ladder/video/VideoResolutionRepository.java).
+
+### Uploads bypass the API
+
+The client never sends video bytes to the Spring server. `POST /api/v1/videos` creates the row and returns a **presigned URL**: a link signed with the storage secret that permits exactly one `PUT`, to one object key, for 15 minutes. The client uploads straight to object storage, then calls `POST /api/v1/videos/{id}/complete`.
+
+Routing a 2GB upload through the API would hold a server thread and its bandwidth for minutes per upload — and Spring rejects multipart bodies over 1MB by default anyway. The object key is derived from the server's own video id, never from the client's filename, so a client can only ever write into the slot it was given.
+
+Because the server isn't involved in the upload, it can't know when one finishes — hence `/complete`, which doesn't take the client's word for it: it checks the object actually exists in storage before queueing work.
+
+*Built* — [`VideoService`](src/main/java/com/ladder/video/VideoService.java).
+
+### One queue message per rendition
+
+Completing an upload publishes four RabbitMQ messages, one per `(video_id, resolution)`. One message = one worker job = one `video_resolutions` row. FFmpeg can encode the whole ladder in one command, slightly more efficiently; it was rejected because per-rendition jobs retry independently (a failed 1080p doesn't redo 240p), run in parallel across workers, and make partial progress visible.
+
+Messages carry only ids — never paths, bitrates or bytes. The worker derives everything else, so a message that waits in the queue through a config change still gets the current settings, and a forged message can't point the worker at an arbitrary file.
+
+*Built* — [`TranscodeWorker`](src/main/java/com/ladder/transcode/TranscodeWorker.java), [`TranscodeQueueConfig`](src/main/java/com/ladder/transcode/TranscodeQueueConfig.java).
+
+### Every job is safe to run twice
+
+RabbitMQ delivers *at least* once: a worker that crashes after finishing but before acknowledging gets its job redelivered. So the rendition write is an `INSERT … ON CONFLICT DO UPDATE` against `UNIQUE (video_id, resolution)`, not a plain insert — a duplicate overwrites the same row instead of failing a job that actually succeeded. Output paths are deterministic, so the re-uploaded segments overwrite cleanly too.
+
+Failures are bounded: a job is retried twice, then dead-lettered, and the video is marked `FAILED`. Without a ceiling, a corrupt upload — which fails every time — would retry forever and starve real work. Workers take one job at a time (`prefetch=1`), because FFmpeg saturates every core and two concurrent encodes just make both slower.
+
+Status changes are single conditional statements (`UPDATE … WHERE status = 'UPLOADING'`), so two concurrent `/complete` calls can't both queue the transcode — the database lets exactly one win.
+
+*Built and tested* — duplicate delivery leaves one row; a job for a missing source is retried, dead-lettered, and flips the video to `FAILED`.
+
+### Keyframes are pinned so renditions align
+
+A player can only switch rendition at a keyframe, so every rendition must have keyframes at identical timestamps. FFmpeg's default places them at scene changes, which differ per resolution. The encoder pins a keyframe every 48 frames with scene-cut detection off (`-g 48 -keyint_min 48 -sc_threshold 0`); 48 frames at 24fps is 2s, which divides the 10s segment evenly.
+
+*Built* — [`FfmpegTranscoder`](src/main/java/com/ladder/transcode/FfmpegTranscoder.java). Verified on a 24fps clip: 240p and 480p keyframes identical, 3 × 10.0s segments. Not yet correct for other frame rates (see Known gaps).
 
 ### Access control is scoped, not flat
 
@@ -45,7 +80,7 @@ Two scopes, so two assignment tables: `channel_memberships` (carries `channel_id
 
 The tempting alternative is one table with a nullable `channel_id`, where `NULL` means "global". It was rejected for a specific reason: unique constraints treat NULLs as distinct, so that table can't cleanly enforce one grant per user per role — and more importantly, forgetting an `IS NULL` in a single `WHERE` clause silently promotes a channel-scoped grant to a global one. That's an authorization bug that **fails open**, which is the worst way for one to fail. Splitting the tables makes the mistake structurally impossible rather than merely discouraged.
 
-*Designed.*
+*Schema built; enforcement designed.* The tables and seed roles exist, but no endpoint checks permissions yet — every route is currently open (see Known gaps).
 
 ### One role per channel
 
@@ -53,7 +88,7 @@ The tempting alternative is one table with a nullable `channel_id`, where `NULL`
 
 The cost is compositional flexibility. The benefit is that every permission check resolves exactly one role, and "why can this person do that" has one unambiguous answer. GitHub makes the same call — one permission level per repository. Widening to `(channel_id, user_id, role_id)` later is a small migration if it's ever needed.
 
-*Designed.*
+*Schema built; enforcement designed.*
 
 ### Roles are rows, not an enum
 
@@ -63,7 +98,7 @@ If roles were a Postgres `ENUM`, the permission set would necessarily live in ap
 
 Status fields (`video.status`, `video.visibility`, `resolution`) use `VARCHAR` + `CHECK` rather than native enum types — same validity guarantee, but changing the allowed set is dropping and re-adding a constraint instead of an `ALTER TYPE` migration. Adding 1440p should not require a type change.
 
-*Designed.*
+*Built* (schema) — the role and permission tables are seeded in the migration; nothing reads them yet.
 
 ### UUIDv7 primary keys
 
@@ -71,7 +106,7 @@ The leading 48 bits are a Unix millisecond timestamp, so values are time-ordered
 
 The trade-off, stated plainly: **a UUIDv7 leaks its creation time.** Video and comment IDs appear in public URLs, so anyone holding two of them learns their relative creation order and roughly when each was made. Acceptable here — `created_at` is public anyway — but it's a real consideration and would need an opaque public slug if creation timing were ever sensitive.
 
-*Designed.*
+*Built* — JPA entities generate UUIDv7 in Java (Hibernate `@UuidGenerator(style = VERSION_7)`), because Hibernate needs the id before the insert; rows written by native SQL use the column's `DEFAULT uuidv7()`.
 
 ### View counts are eventually consistent, on purpose
 
@@ -95,7 +130,7 @@ Ten tables, in two groups.
 
 Comments are threaded via an adjacency list (`parent_comment_id` self-reference) walked with a recursive CTE, with a depth cap. Materialized path was the alternative if tree reads became hot; nested set was rejected outright — the update cost is brutal for a comment tree that changes constantly.
 
-Full DDL with inline rationale: [`V1__create_video_platform_schema.sql`](#).
+Full DDL with inline rationale: [`V1__create_video_platform_schema.sql`](src/main/resources/db/migration/V1__create_video_platform_schema.sql), applied by Flyway on startup. *Built.*
 
 ---
 
@@ -109,19 +144,27 @@ Listed so they read as decisions rather than oversights.
 - **Permission checks are uncached** — the check is three joins, running on nearly every authorized endpoint. The fix is resolving a user's permission set once and caching it in Redis or embedding it in JWT claims. The catch: both make revocation asynchronous, so a moderator stripped of their role keeps it until the token or cache entry expires. For someone removed for abuse, that window matters. Mitigations are short TTLs, a token-version column, or a denylist consulted on sensitive operations only. This is an application-layer problem the schema doesn't solve.
 - **No partitioning** on any high-volume table.
 - **No resumable upload** — a 2GB upload dying at 90% currently restarts from zero. S3 multipart or the tus protocol is the fix.
+- **No playback yet** — renditions are produced, but nothing writes the master playlist or moves a video to `READY`, and there's no endpoint that hands a player a URL. This is the next step.
+- **No authentication** — [`DevSecurityConfig`](src/main/java/com/ladder/security/DevSecurityConfig.java) permits every request so the pipeline could be built first. Temporary; never to be deployed. The channel id currently comes from the request body.
+- **Queueing isn't atomic with the status change** — Postgres and RabbitMQ can't share a transaction. If publishing fails, the status is reverted so the client can retry; a crash *between* the two steps still strands the video in `PROCESSING`. The full fix is a transactional outbox table.
+- **Keyframe interval assumes 24fps** — on 30fps sources 48 frames is 1.6s, which doesn't divide 10s. Renditions still align with each other, but segments come out uneven. Fix: probe the frame rate and use `2 × fps`.
+- **No upscale guard** — a 480p upload still produces a "1080p" rendition, which is a blown-up 480p costing more bandwidth for nothing.
+- **No size or quota check** — a presigned URL accepts an upload of any size, and videos whose upload never completes stay in `UPLOADING` forever.
+- **The worker runs inside the API process** — it's designed as its own image (so the API container never ships FFmpeg); the [`Dockerfile`](Dockerfile) is a draft and doesn't work yet.
+- **No automated tests** — everything above was verified by hand against the running stack; Testcontainers is planned.
 
 ---
 
 ## Architecture sketch
 
 ```
-client ──presigned URL──> object storage (MinIO)
+client ──presigned PUT──> object storage (RustFS, S3 API)        built
    │
-   └──> API (Spring Boot) ──> Postgres          metadata, auth, RBAC
+   └──> API (Spring Boot) ──> Postgres                         built (RBAC: schema only)
                 │
-                └──> queue ──> transcode worker ──> renditions + manifest
-                │
-                └──> queue ──> watch events ──> columnar store
+                └──> RabbitMQ ──> transcode worker ──> renditions   built
+                │                                 └─> master playlist   designed
+                └──> queue ──> watch events ──> columnar store       designed
 ```
 
 Three groups with genuinely different load characteristics, which is what drives the architecture more than the feature list does:
@@ -136,7 +179,44 @@ Three groups with genuinely different load characteristics, which is what drives
 
 ## Stack
 
-Postgres 18 · Spring Boot · MinIO · Redis · RabbitMQ · FFmpeg · Docker
+Spring Boot 4 · Postgres 18 + Flyway · RustFS (S3-compatible) · RabbitMQ · FFmpeg · Redis · Docker Compose
+
+Object storage was planned as MinIO; its image is no longer published on Docker Hub, so RustFS stands in. The app talks to it through the plain S3 API (MinIO's Java client), so any S3-compatible store works. Redis is wired up but not used yet.
+
+---
+
+## Running it locally
+
+Needs Docker, a JDK (the toolchain is set in `build.gradle`) and `ffmpeg` on your `PATH` — the worker runs in-process for now.
+
+```bash
+./gradlew bootRun     # starts Postgres, RabbitMQ, Redis and RustFS via compose.yaml, applies the schema
+```
+
+`bootRun` keeps running for as long as the app does. If you start containers yourself, start all of them (`docker compose up -d`): Spring Boot skips its own startup when any service is already running.
+
+There's no sign-up yet, so seed one user and channel:
+
+```bash
+docker compose exec postgres psql -U ladder -d ladder -c "
+  INSERT INTO users (email, user_name, user_handle) VALUES ('me@example.com', 'Me', 'me');
+  INSERT INTO channels (user_id, channel_name, channel_handle)
+    SELECT user_id, 'My Channel', 'mychannel' FROM users WHERE user_handle = 'me';
+  SELECT channel_id FROM channels;"
+```
+
+Then upload and transcode a video:
+
+```bash
+curl -X POST localhost:8080/api/v1/videos -H 'Content-Type: application/json' \
+     -d '{"channelId":"<channel_id>","title":"First upload"}'      # -> {videoId, uploadUrl}
+curl -X PUT --upload-file video.mp4 "<uploadUrl>"
+curl -X POST localhost:8080/api/v1/videos/<videoId>/complete      # -> 202, renditions appear shortly
+```
+
+No video handy? `ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=24:duration=30 -f lavfi -i sine=duration=30 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest video.mp4`
+
+The storage console is at http://localhost:9001; the credentials are in `compose.yaml` (local development only).
 
 ---
 
