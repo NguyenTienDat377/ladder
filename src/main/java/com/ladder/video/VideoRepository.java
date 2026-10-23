@@ -16,4 +16,15 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Query("update Video v set v.status = 'PROCESSING' where v.videoId = :id and v.status = 'UPLOADING'")
     int markProcessing(UUID id);
 
+    // Undo markProcessing when queueing fails, so the client can retry /complete.
+    @Modifying
+    @Transactional
+    @Query("update Video v set v.status = 'UPLOADING' where v.videoId = :id and v.status = 'PROCESSING'")
+    int revertToUploading(UUID id);
+
+    // Called when a transcode job is dead-lettered after its retries run out.
+    @Modifying
+    @Transactional
+    @Query("update Video v set v.status = 'FAILED' where v.videoId = :id and v.status = 'PROCESSING'")
+    int markFailed(UUID id);
 }

@@ -4,6 +4,8 @@ import java.util.concurrent.TimeUnit;
 
 import java.util.UUID;
 
+import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,6 +13,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.ladder.storage.StorageKeys;
 import com.ladder.storage.StorageProperties;
+import com.ladder.transcode.FfmpegTranscoder.Rendition;
+import com.ladder.transcode.TranscodeJob;
+import com.ladder.transcode.TranscodeQueueConfig;
 import com.ladder.video.dto.VideoCreateRequest;
 import com.ladder.video.dto.VideoCreateResponse;
 
@@ -28,11 +33,14 @@ public class VideoService {
     private final VideoRepository videoRepository;
     private final MinioClient minioClient;
     private final StorageProperties storage;
+    private final RabbitTemplate rabbitTemplate;
 
-    public VideoService(VideoRepository videoRepository, MinioClient minioClient, StorageProperties storage) {
+    public VideoService(VideoRepository videoRepository, MinioClient minioClient,
+                        StorageProperties storage, RabbitTemplate rabbitTemplate) {
         this.videoRepository = videoRepository;
         this.minioClient = minioClient;
         this.storage = storage;
+        this.rabbitTemplate = rabbitTemplate;
     }
 
     @Transactional
@@ -76,7 +84,23 @@ public class VideoService {
         if (videoRepository.markProcessing(videoId) == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "video is not awaiting upload");
         }
-        // TODO next step: publish one transcode message per resolution to RabbitMQ.
+
+        // The status change and the publish can't be one atomic step: Postgres and
+        // RabbitMQ don't share a transaction. If publishing fails, undo the status
+        // so the client can call /complete again instead of the video being stuck
+        // in PROCESSING forever. A retry may re-send jobs that already went out;
+        // the worker's upsert makes duplicates harmless.
+        // ponytail: revert-on-failure misses a crash between the two steps; the
+        // full fix is a transactional outbox table, worth it once that's observed.
+        try {
+            for (Rendition rendition : Rendition.LADDER) {
+                rabbitTemplate.convertAndSend(TranscodeQueueConfig.EXCHANGE, TranscodeQueueConfig.ROUTING_KEY,
+                        new TranscodeJob(videoId, rendition.label()));
+            }
+        } catch (AmqpException e) {
+            videoRepository.revertToUploading(videoId);
+            throw e;
+        }
     }
 
     private boolean uploadExists(UUID videoId) {
