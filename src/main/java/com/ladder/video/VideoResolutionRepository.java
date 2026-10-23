@@ -1,5 +1,6 @@
 package com.ladder.video;
 
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -25,4 +26,6 @@ public interface VideoResolutionRepository extends JpaRepository<VideoResolution
                 bitrate_kbps        = EXCLUDED.bitrate_kbps
             """)
     int upsert(UUID videoId, String resolution, String objectStoragePath, int segmentCount, int bitrateKbps);
+
+    List<VideoResolution> findByVideoId(UUID videoId);
 }

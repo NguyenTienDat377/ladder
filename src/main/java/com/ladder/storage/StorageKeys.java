@@ -12,6 +12,12 @@ public final class StorageKeys {
         return "uploads/" + videoId + "/source.mp4";
     }
 
+    // The file a player starts from; sits next to the rendition folders so its
+    // entries can be relative ("480p/playlist.m3u8").
+    public static String masterPlaylistKey(UUID videoId) {
+        return "videos/" + videoId + "/master.m3u8";
+    }
+
     // Ends with "/": callers append file names (playlist.m3u8, segment_000.ts).
     public static String renditionPrefix(UUID videoId, String resolution) {
         return "videos/" + videoId + "/" + resolution + "/";

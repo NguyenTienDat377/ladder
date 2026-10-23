@@ -27,4 +27,12 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Transactional
     @Query("update Video v set v.status = 'FAILED' where v.videoId = :id and v.status = 'PROCESSING'")
     int markFailed(UUID id);
+
+    // Called once every rendition exists and the master playlist is written.
+    // The status condition means only one caller can succeed, even if two
+    // workers finish the last renditions at the same moment.
+    @Modifying
+    @Transactional
+    @Query("update Video v set v.status = 'READY' where v.videoId = :id and v.status = 'PROCESSING'")
+    int markReady(UUID id);
 }

@@ -4,7 +4,7 @@ An adaptive-bitrate video platform, built to understand how one actually works.
 
 A *bitrate ladder* is the set of encoded renditions a video is transcoded into — 1080p, 720p, 480p, 240p — so a player can step up or down the rungs as network conditions change. That mechanism is the core of this project, and the reason for its name.
 
-**Status: building.** Upload → transcode works end to end: a video goes in, four HLS renditions come out in object storage. Playback, auth and everything around them are not built yet. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
+**Status: building.** Upload → transcode works end to end: a video goes in, four HLS renditions and a master playlist come out in object storage, and the video becomes `READY`. Serving it to a player, auth and everything around them are not built yet. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
 
 ---
 
@@ -63,6 +63,14 @@ Failures are bounded: a job is retried twice, then dead-lettered, and the video 
 Status changes are single conditional statements (`UPDATE … WHERE status = 'UPLOADING'`), so two concurrent `/complete` calls can't both queue the transcode — the database lets exactly one win.
 
 *Built and tested* — duplicate delivery leaves one row; a job for a missing source is retried, dead-lettered, and flips the video to `FAILED`.
+
+### The last rendition makes the video playable
+
+The master playlist — the one URL a player starts from, listing all four renditions and the bandwidth each needs — can only be written once every rendition exists. There's no separate coordinator process: after each rendition, the worker that finished it checks whether all four rows exist, and if so writes `master.m3u8` and flips the video to `READY`.
+
+Two workers can finish the last renditions at the same moment. No lock is needed: each checks only after its own row has committed, so the last to commit always sees the full set. Both may write the master — harmless, the content is identical — and `UPDATE … WHERE status = 'PROCESSING'` lets exactly one flip the status. The master is written *before* the status changes, so `READY` is never visible before the file a player needs.
+
+*Built* — [`TranscodeCoordinator`](src/main/java/com/ladder/transcode/TranscodeCoordinator.java). Verified: FFmpeg opens the master as a four-variant adaptive stream and every rendition decodes cleanly. The concurrent-finish case is reasoned, not yet tested (workers currently run one at a time).
 
 ### Keyframes are pinned so renditions align
 
@@ -144,7 +152,8 @@ Listed so they read as decisions rather than oversights.
 - **Permission checks are uncached** — the check is three joins, running on nearly every authorized endpoint. The fix is resolving a user's permission set once and caching it in Redis or embedding it in JWT claims. The catch: both make revocation asynchronous, so a moderator stripped of their role keeps it until the token or cache entry expires. For someone removed for abuse, that window matters. Mitigations are short TTLs, a token-version column, or a denylist consulted on sensitive operations only. This is an application-layer problem the schema doesn't solve.
 - **No partitioning** on any high-volume table.
 - **No resumable upload** — a 2GB upload dying at 90% currently restarts from zero. S3 multipart or the tus protocol is the fix.
-- **No playback yet** — renditions are produced, but nothing writes the master playlist or moves a video to `READY`, and there's no endpoint that hands a player a URL. This is the next step.
+- **No playback yet** — videos reach `READY` with a master playlist, but there's no endpoint that hands a player a URL. This is the next step.
+- **Master playlist omits `RESOLUTION` and `CODECS`** — both optional. Encodes keep the source's aspect ratio, so the nominal 16:9 width would be wrong for vertical or 4:3 video; they need the worker to probe the real output first.
 - **No authentication** — [`DevSecurityConfig`](src/main/java/com/ladder/security/DevSecurityConfig.java) permits every request so the pipeline could be built first. Temporary; never to be deployed. The channel id currently comes from the request body.
 - **Queueing isn't atomic with the status change** — Postgres and RabbitMQ can't share a transaction. If publishing fails, the status is reverted so the client can retry; a crash *between* the two steps still strands the video in `PROCESSING`. The full fix is a transactional outbox table.
 - **Keyframe interval assumes 24fps** — on 30fps sources 48 frames is 1.6s, which doesn't divide 10s. Renditions still align with each other, but segments come out uneven. Fix: probe the frame rate and use `2 × fps`.
@@ -163,7 +172,7 @@ client ──presigned PUT──> object storage (RustFS, S3 API)        built
    └──> API (Spring Boot) ──> Postgres                         built (RBAC: schema only)
                 │
                 └──> RabbitMQ ──> transcode worker ──> renditions   built
-                │                                 └─> master playlist   designed
+                │                                 └─> master playlist   built
                 └──> queue ──> watch events ──> columnar store       designed
 ```
 

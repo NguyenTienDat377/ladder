@@ -39,14 +39,17 @@ public class TranscodeWorker {
     private final StorageProperties storage;
     private final VideoResolutionRepository resolutions;
     private final VideoRepository videos;
+    private final TranscodeCoordinator coordinator;
 
     public TranscodeWorker(FfmpegTranscoder transcoder, MinioClient minioClient, StorageProperties storage,
-                           VideoResolutionRepository resolutions, VideoRepository videos) {
+                           VideoResolutionRepository resolutions, VideoRepository videos,
+                           TranscodeCoordinator coordinator) {
         this.transcoder = transcoder;
         this.minioClient = minioClient;
         this.storage = storage;
         this.resolutions = resolutions;
         this.videos = videos;
+        this.coordinator = coordinator;
     }
 
     @RabbitListener(queues = TranscodeQueueConfig.QUEUE)
@@ -73,6 +76,10 @@ public class TranscodeWorker {
             resolutions.upsert(job.videoId(), rendition.label(), prefix + "playlist.m3u8",
                     segmentCount, rendition.videoBitrateKbps());
             log.info("transcoded {} {} ({} segments)", job.videoId(), rendition.label(), segmentCount);
+
+            // After the upsert has committed (it runs in its own transaction), so
+            // this job's row is visible to the check.
+            coordinator.onRenditionDone(job.videoId());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         } finally {
