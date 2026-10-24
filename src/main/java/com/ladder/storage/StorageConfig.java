@@ -3,6 +3,11 @@ package com.ladder.storage;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import io.minio.SetBucketCorsArgs;
+import io.minio.messages.CORSConfiguration;
+
+import java.util.List;
+
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +32,16 @@ public class StorageConfig {
             if (!exists) {
                 client.makeBucket(MakeBucketArgs.builder().bucket(props.bucket()).build());
             }
+            client.setBucketCors(SetBucketCorsArgs.builder()
+                .bucket(props.bucket())
+                .config(new CORSConfiguration(List.of(new CORSConfiguration.CORSRule(
+                        List.of("*"),                    // allowedHeaders
+                        List.of("GET", "HEAD"),          // allowedMethods: players only read
+                        List.of(props.corsOrigin()),     // allowedOrigins
+                        List.of(),                       // exposeHeaders
+                        null,                            // id
+                        3600))))                         // maxAgeSeconds
+                .build());
         };
     }
 }

@@ -14,14 +14,19 @@ import com.ladder.video.dto.VideoCreateRequest;
 import com.ladder.video.dto.VideoCreateResponse;
 
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+
 
 @RestController
 @RequestMapping("/api/v1/videos")
 public class VideoController {
+    private final PlaybackService playbackService;
     private final VideoService videoService;
 
-    public VideoController(VideoService videoService) {
+    public VideoController(VideoService videoService, PlaybackService playbackService) {
         this.videoService = videoService;
+        this.playbackService = playbackService;
     }
 
     @PostMapping
@@ -36,4 +41,14 @@ public class VideoController {
     public void completeUpload(@PathVariable UUID id) {
         videoService.completeUpload(id);
     }
+
+    @GetMapping(value = "/{id}/master.m3u8", produces = "application/vnd.apple.mpegurl")
+    public String masterPlaylist(@PathVariable UUID id) {
+        return playbackService.masterPlaylist(id);
+    }
+    @GetMapping(value = "/{id}/{resolution}/playlist.m3u8", produces = "application/vnd.apple.mpegurl")
+    public String renditionPlaylist(@PathVariable UUID id, @PathVariable String resolution) {
+        return playbackService.renditionPlaylist(id, resolution);
+    }
+
 }
