@@ -60,8 +60,10 @@ public class CatalogService {
         return jdbc.queryForObject("""
                 SELECT v.title, v.description, v.visibility, v.status, v.created_at, v.duration_secs,
                        v.like_count, v.dislike_count,
-                       c.channel_id, c.channel_name, c.channel_handle, c.subscriber_count
+                       c.channel_id, c.channel_name, c.channel_handle, c.subscriber_count,
+                       r.reaction
                 FROM videos v JOIN channels c ON c.channel_id = v.channel_id
+                LEFT JOIN video_reactions r ON r.video_id = v.video_id AND r.user_id = ?::uuid
                 WHERE v.video_id = ?
                 """,
                 (rs, row) -> new VideoDetailsResponse(videoId, rs.getString("title"), rs.getString("description"),
@@ -70,8 +72,9 @@ public class CatalogService {
                         // Stored count plus the views still waiting in Redis.
                         viewCounts.displayedCount(video), rs.getLong("like_count"), rs.getLong("dislike_count"),
                         new ChannelInfo(rs.getObject("channel_id", UUID.class), rs.getString("channel_name"),
-                                rs.getString("channel_handle"), rs.getLong("subscriber_count"))),
-                videoId);
+                                rs.getString("channel_handle"), rs.getLong("subscriber_count")),
+                        rs.getString("reaction")),
+                userId, videoId);
     }
 
     /** The home feed: newest public videos first. */
@@ -93,13 +96,18 @@ public class CatalogService {
     }
 
     public ChannelPageResponse channel(String handle, UUID before, int limit, UUID userId) {
-        record ChannelRow(UUID channelId, String name, String handle, long subscribers) {
+        record ChannelRow(UUID channelId, String name, String handle, long subscribers, boolean subscribed) {
         }
-        ChannelRow channel = jdbc.query(
-                        "SELECT channel_id, channel_name, channel_handle, subscriber_count FROM channels WHERE channel_handle = ?",
+        // The EXISTS is false for an anonymous caller: a null id matches no row.
+        ChannelRow channel = jdbc.query("""
+                        SELECT channel_id, channel_name, channel_handle, subscriber_count,
+                               EXISTS (SELECT 1 FROM subscriptions s
+                                       WHERE s.channel_id = channels.channel_id AND s.subscriber_id = ?::uuid) AS subscribed
+                        FROM channels WHERE channel_handle = ?
+                        """,
                         (rs, row) -> new ChannelRow(rs.getObject("channel_id", UUID.class), rs.getString("channel_name"),
-                                rs.getString("channel_handle"), rs.getLong("subscriber_count")),
-                        handle)
+                                rs.getString("channel_handle"), rs.getLong("subscriber_count"), rs.getBoolean("subscribed")),
+                        userId, handle)
                 .stream().findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "channel not found"));
 
@@ -126,7 +134,8 @@ public class CatalogService {
                 Long.class, channel.channelId());
 
         return new ChannelPageResponse(channel.channelId(), channel.name(), channel.handle(), channel.subscribers(),
-                publicVideos == null ? 0 : publicVideos, canManage, page(rows, size));
+                publicVideos == null ? 0 : publicVideos, canManage, channel.subscribed(),
+                page(rows, size));
     }
 
     /** Changes only the fields that were sent. Needs login (the caller) and video.edit on the video's channel. */

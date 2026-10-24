@@ -124,7 +124,13 @@ The trade-off, stated plainly: **a UUIDv7 leaks its creation time.** Video and c
 
 The intended path is events → queue → Redis counter → periodic flush into the column. Which means the number displayed is approximate by design. It's a display value; nothing that requires exactness should be computed from it.
 
-*Designed. Not yet built — the counter columns currently have no backing tables (see Known gaps).*
+*Built* ([`ViewCountService`](src/main/java/com/ladder/video/ViewCountService.java)). `POST /api/v1/videos/{id}/view` counts a viewer once per 30 minutes (an atomic `SET NX EX`) and adds to a Redis hash. Every minute a job `RENAME`s that hash aside, adds its counts to `view_count` in one transaction, then deletes it; a batch left behind by a crash is finished first. The number shown is the stored count plus what is still pending. Limit: assumes one API instance.
+
+### Subscriber and like counts are exact, on purpose
+
+Subscribing and liking are deliberate clicks, not a firehose, so they take the other route: the `subscriptions` and `video_reactions` tables are the source of truth, and `channels.subscriber_count` / `videos.like_count` / `dislike_count` are recomputed from them **in the same transaction** as each write. A recount is exact, heals any drift and makes repeating a request harmless. Each write first locks the channel or video row: under Postgres's default isolation two racing recounts can each miss the other's insert and store a wrong number, and the lock makes the second writer wait. The cost is that writes to one hot channel or video run one at a time; the way out is the Redis path above.
+
+*Built* ([`EngagementService`](src/main/java/com/ladder/video/EngagementService.java)), including a test that fires 20 users at one channel and one video at once and checks every counter against its table.
 
 ---
 
@@ -146,8 +152,6 @@ Full DDL with inline rationale: [`V1__create_video_platform_schema.sql`](src/mai
 
 Listed so they read as decisions rather than oversights.
 
-- **No `subscriptions` table** — `channels.subscriber_count` has nothing behind it yet.
-- **No `video_reactions` table** — same for `like_count` / `dislike_count`.
 - **No `watch_events`** — deliberately absent. That data belongs in a columnar store (ClickHouse) fed by a queue, not in the transactional database.
 - **Permission checks are uncached** — the check is three joins, running on nearly every authorized endpoint. The fix is resolving a user's permission set once and caching it in Redis or embedding it in JWT claims. The catch: both make revocation asynchronous, so a moderator stripped of their role keeps it until the token or cache entry expires. For someone removed for abuse, that window matters. Mitigations are short TTLs, a token-version column, or a denylist consulted on sensitive operations only. This is an application-layer problem the schema doesn't solve.
 - **No partitioning** on any high-volume table.
