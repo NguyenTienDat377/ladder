@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.ladder.security.Permissions;
 import com.ladder.storage.StorageKeys;
 import com.ladder.storage.StorageProperties;
 import com.ladder.transcode.FfmpegTranscoder.Rendition;
@@ -34,24 +35,30 @@ public class VideoService {
     private final MinioClient minioClient;
     private final StorageProperties storage;
     private final RabbitTemplate rabbitTemplate;
+    private final Permissions permissions;
 
     public VideoService(VideoRepository videoRepository, MinioClient minioClient,
-                        StorageProperties storage, RabbitTemplate rabbitTemplate) {
+                        StorageProperties storage, RabbitTemplate rabbitTemplate, Permissions permissions) {
         this.videoRepository = videoRepository;
         this.minioClient = minioClient;
         this.storage = storage;
         this.rabbitTemplate = rabbitTemplate;
+        this.permissions = permissions;
     }
 
     @Transactional
-    public VideoCreateResponse createVideo(VideoCreateRequest request) {
+    public VideoCreateResponse createVideo(VideoCreateRequest request, UUID userId) {
+        // The channel id comes from the client, so it proves nothing by
+        // itself: the caller must hold video.upload on THAT channel.
+        permissions.require(userId, request.channelId(), "video.upload");
+
         Video video = new Video();
         video.setChannelId(request.channelId());
         video.setTitle(request.title());
         // Set explicitly: Hibernate writes every mapped column, so a null here
         // would override the DB default and fail NOT NULL.
         video.setStatus("UPLOADING");
-        video.setVisibility("PRIVATE");
+        video.setVisibility(request.visibility() == null ? "PRIVATE" : request.visibility());
         videoRepository.save(video);
 
         String objectKey = StorageKeys.sourceKey(video.getVideoId());
@@ -74,10 +81,11 @@ public class VideoService {
     // Not @Transactional: statObject is a network call, and holding a DB
     // connection open while waiting on storage wastes the pool. The only write
     // is markProcessing, which runs in its own short transaction.
-    public void completeUpload(UUID videoId) {
-        if (!videoRepository.existsById(videoId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "video not found");
-        }
+    public void completeUpload(UUID videoId, UUID userId) {
+        Video video = videoRepository.findById(videoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "video not found"));
+        // Whoever may upload to the video's channel may finish its upload.
+        permissions.require(userId, video.getChannelId(), "video.upload");
         if (!uploadExists(videoId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "no upload found for this video");
         }

@@ -1,5 +1,6 @@
 package com.ladder.video;
 
+import java.security.Principal;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.ladder.security.CurrentUser;
 import com.ladder.video.dto.VideoCreateRequest;
 import com.ladder.video.dto.VideoCreateResponse;
 import com.ladder.video.dto.ViewCountResponse;
@@ -33,32 +35,35 @@ public class VideoController {
         this.viewCountService = viewCountService;
     }
 
-    // Viewer = client address until login exists; everyone behind one NAT counts as one.
+    // Viewer = the login when there is one, else the client address (so
+    // everyone behind one NAT counts as one anonymous viewer).
     @PostMapping("/{id}/view")
-    public ViewCountResponse recordView(@PathVariable UUID id, HttpServletRequest request) {
-        return new ViewCountResponse(viewCountService.recordView(id, request.getRemoteAddr()));
+    public ViewCountResponse recordView(@PathVariable UUID id, HttpServletRequest request, Principal principal) {
+        UUID userId = CurrentUser.idOrNull(principal);
+        String viewer = userId != null ? userId.toString() : request.getRemoteAddr();
+        return new ViewCountResponse(viewCountService.recordView(id, viewer, userId));
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public VideoCreateResponse createVideo(@Valid @RequestBody VideoCreateRequest request) {
-        return videoService.createVideo(request);
+    public VideoCreateResponse createVideo(@Valid @RequestBody VideoCreateRequest request, Principal principal) {
+        return videoService.createVideo(request, CurrentUser.idOrNull(principal));
     }
 
     // 202 Accepted, not 200: the transcode happens later, asynchronously.
     @PostMapping("/{id}/complete")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    public void completeUpload(@PathVariable UUID id) {
-        videoService.completeUpload(id);
+    public void completeUpload(@PathVariable UUID id, Principal principal) {
+        videoService.completeUpload(id, CurrentUser.idOrNull(principal));
     }
 
     @GetMapping(value = "/{id}/master.m3u8", produces = "application/vnd.apple.mpegurl")
-    public String masterPlaylist(@PathVariable UUID id) {
-        return playbackService.masterPlaylist(id);
+    public String masterPlaylist(@PathVariable UUID id, Principal principal) {
+        return playbackService.masterPlaylist(id, CurrentUser.idOrNull(principal));
     }
     @GetMapping(value = "/{id}/{resolution}/playlist.m3u8", produces = "application/vnd.apple.mpegurl")
-    public String renditionPlaylist(@PathVariable UUID id, @PathVariable String resolution) {
-        return playbackService.renditionPlaylist(id, resolution);
+    public String renditionPlaylist(@PathVariable UUID id, @PathVariable String resolution, Principal principal) {
+        return playbackService.renditionPlaylist(id, resolution, CurrentUser.idOrNull(principal));
     }
 
 }

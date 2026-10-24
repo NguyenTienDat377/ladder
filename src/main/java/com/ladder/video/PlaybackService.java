@@ -2,13 +2,11 @@ package com.ladder.video;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.springframework.http.HttpStatus;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -25,28 +23,20 @@ import io.minio.Http;
 
 @Service 
 public class PlaybackService {
-    private final VideoRepository videoRepository;
+    private final VideoAccess videoAccess;
     private final MinioClient minioClient;
     private final StorageProperties storageProperties;
     private static final int SEGMENT_URL_EXPIRY_HOURS = 6;
-    public PlaybackService(VideoRepository videoRepository, MinioClient minioClient, StorageProperties storageProperties) {
-        this.videoRepository = videoRepository;
+    public PlaybackService(VideoAccess videoAccess, MinioClient minioClient, StorageProperties storageProperties) {
+        this.videoAccess = videoAccess;
         this.minioClient = minioClient;
         this.storageProperties = storageProperties;
     }
 
-    public String masterPlaylist(UUID id) {
-        requirePlayable(id);
+    /** @param userId the logged-in user, or null for an anonymous visitor */
+    public String masterPlaylist(UUID id, UUID userId) {
+        videoAccess.requireWatchable(id, userId);
         return readObject(StorageKeys.masterPlaylistKey(id));
-    }
-
-    private void requirePlayable(UUID id) {
-        boolean ready = videoRepository.findById(id)
-                .map(video -> "READY".equals(video.getStatus()))
-                .orElse(false);
-        if (!ready) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
-        }
     }
 
     private String readObject(String key) {
@@ -59,10 +49,10 @@ public class PlaybackService {
             throw new IllegalStateException("could not read " + key, e);
         }
     }
-    public String renditionPlaylist(UUID id, String resolution) {
+    public String renditionPlaylist(UUID id, String resolution, UUID userId) {
         Rendition rendition = Rendition.fromLabel(resolution)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        requirePlayable(id);
+        videoAccess.requireWatchable(id, userId);
 
         String prefix = StorageKeys.renditionPrefix(id, rendition.label());
         return readObject(prefix + "playlist.m3u8").lines()

@@ -61,8 +61,8 @@ class ViewCountServiceTest {
     void sameViewerCountedOnceWithinWindow() {
         UUID video = seedVideo("READY");
 
-        views.recordView(video, "1.1.1.1");
-        long second = views.recordView(video, "1.1.1.1");
+        views.recordView(video, "1.1.1.1", null);
+        long second = views.recordView(video, "1.1.1.1", null);
 
         assertThat(pending(video)).isEqualTo(1);
         assertThat(second).isEqualTo(1);
@@ -72,8 +72,8 @@ class ViewCountServiceTest {
     void differentViewersAreBothCounted() {
         UUID video = seedVideo("READY");
 
-        views.recordView(video, "1.1.1.1");
-        long second = views.recordView(video, "2.2.2.2");
+        views.recordView(video, "1.1.1.1", null);
+        long second = views.recordView(video, "2.2.2.2", null);
 
         assertThat(pending(video)).isEqualTo(2);
         assertThat(second).isEqualTo(2);
@@ -83,7 +83,7 @@ class ViewCountServiceTest {
     void videoThatIsNotReadyReturns404AndWritesNothing() {
         UUID video = seedVideo("PROCESSING");
 
-        assertThatThrownBy(() -> views.recordView(video, "1.1.1.1"))
+        assertThatThrownBy(() -> views.recordView(video, "1.1.1.1", null))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         e -> assertThat(e.getStatusCode().value()).isEqualTo(404));
 
@@ -93,9 +93,9 @@ class ViewCountServiceTest {
     @Test
     void flushMovesPendingViewsIntoTheDatabase() {
         UUID video = seedVideo("READY");
-        views.recordView(video, "1.1.1.1");
-        views.recordView(video, "2.2.2.2");
-        views.recordView(video, "3.3.3.3");
+        views.recordView(video, "1.1.1.1", null);
+        views.recordView(video, "2.2.2.2", null);
+        views.recordView(video, "3.3.3.3", null);
 
         views.flush();
 
@@ -103,14 +103,14 @@ class ViewCountServiceTest {
         assertThat(redis.hasKey(ViewCountService.PENDING)).isFalse();
         assertThat(redis.hasKey(ViewCountService.FLUSHING)).isFalse();
         // The displayed number must not change just because views moved stores.
-        assertThat(views.recordView(video, "1.1.1.1")).isEqualTo(3);
+        assertThat(views.recordView(video, "1.1.1.1", null)).isEqualTo(3);
     }
 
     @Test
     void flushAddsToWhatTheDatabaseAlreadyHolds() {
         UUID video = seedVideo("READY");
         jdbc.update("UPDATE videos SET view_count = 10 WHERE video_id = ?", video);
-        views.recordView(video, "1.1.1.1");
+        views.recordView(video, "1.1.1.1", null);
 
         views.flush();
 
@@ -143,7 +143,8 @@ class ViewCountServiceTest {
         return jdbc.queryForObject("SELECT view_count FROM videos WHERE video_id = ?", Long.class, video);
     }
 
-    // users -> channels -> videos: each table needs its parent row.
+    // users -> channels -> videos: each table needs its parent row. PUBLIC, because the
+    // column defaults to PRIVATE and an anonymous viewer can't count views on a private video.
     private UUID seedVideo(String status) {
         String tag = UUID.randomUUID().toString().substring(0, 8);
         UUID user = jdbc.queryForObject(
@@ -153,7 +154,7 @@ class ViewCountServiceTest {
                 "INSERT INTO channels (user_id, channel_name, channel_handle) VALUES (?, 'T', ?) RETURNING channel_id",
                 UUID.class, user, "c" + tag);
         return jdbc.queryForObject(
-                "INSERT INTO videos (channel_id, title, status) VALUES (?, 'v', ?) RETURNING video_id",
+                "INSERT INTO videos (channel_id, title, status, visibility) VALUES (?, 'v', ?, 'PUBLIC') RETURNING video_id",
                 UUID.class, channel, status);
     }
 }

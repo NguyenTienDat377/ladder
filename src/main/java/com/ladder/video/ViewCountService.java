@@ -5,11 +5,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -32,20 +30,26 @@ public class ViewCountService {
 
     private final StringRedisTemplate redis;
     private final VideoRepository videos;
+    private final VideoAccess videoAccess;
     private final TransactionTemplate transaction;
 
-    public ViewCountService(StringRedisTemplate redis, VideoRepository videos, TransactionTemplate transaction) {
+    public ViewCountService(StringRedisTemplate redis, VideoRepository videos, VideoAccess videoAccess,
+                            TransactionTemplate transaction) {
         this.redis = redis;
         this.videos = videos;
+        this.videoAccess = videoAccess;
         this.transaction = transaction;
     }
 
-    /** Counts one view unless this viewer was already counted in the last 30 minutes. */
-    public long recordView(UUID videoId, String viewer) {
-        // Same rule as playback: a video nobody can watch yet has no views.
-        Video video = videos.findById(videoId)
-                .filter(v -> "READY".equals(v.getStatus()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "video not found"));
+    /**
+     * Counts one view unless this viewer was already counted in the last 30 minutes.
+     *
+     * @param userId the logged-in user, or null for an anonymous visitor
+     */
+    public long recordView(UUID videoId, String viewer, UUID userId) {
+        // Same rule as playback, from the same class: a video you can't watch
+        // has no views for you to add (and no 200 to reveal that it exists).
+        Video video = videoAccess.requireWatchable(videoId, userId);
 
         // setIfAbsent is one atomic SET NX EX: two simultaneous requests from
         // the same viewer can't both get "true", so they can't both count.
