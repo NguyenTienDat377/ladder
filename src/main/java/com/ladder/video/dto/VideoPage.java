@@ -12,7 +12,7 @@ public record VideoPage(List<Item> items, UUID nextBefore) {
             String channelName, String channelHandle,
             // Only the owner's own listing can contain non-public or unfinished videos.
             String status, String visibility,
-            // Always null until the worker produces thumbnails.
+            // Relative URL of the picture, or null (no thumbnail yet, or not READY).
             String thumbnailUrl) {
     }
 }

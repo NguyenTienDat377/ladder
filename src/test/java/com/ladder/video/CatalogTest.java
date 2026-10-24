@@ -1,9 +1,14 @@
 package com.ladder.video;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,6 +37,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import io.minio.GetObjectArgs;
+import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
 import jakarta.servlet.http.Cookie;
 
@@ -329,6 +336,98 @@ class CatalogTest {
 
         assertThat(jdbc.queryForObject("SELECT description FROM videos WHERE title = 't' AND channel_id = ?::uuid",
                 String.class, channel)).isEqualTo("about");
+    }
+
+    @Test
+    void thumbnailIsServedWithAnEtagAndAPublicCacheAndAnswers304ToARepeatVisit() throws Exception {
+        UUID video = seedVideo(newChannel(), "READY", "PUBLIC", "pic");
+        byte[] jpeg = withThumbnail(video);
+
+        String etag = mvc.perform(get("/api/v1/videos/" + video + "/thumbnail"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                .andExpect(content().bytes(jpeg))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("max-age=3600"),
+                        org.hamcrest.Matchers.containsString("public"))))
+                .andReturn().getResponse().getHeader("ETag");
+        assertThat(etag).isNotBlank();
+
+        mvc.perform(get("/api/v1/videos/" + video + "/thumbnail").header("If-None-Match", etag))
+                .andExpect(status().isNotModified());
+    }
+
+    @Test
+    void unlistedThumbnailIsCacheableToo() throws Exception {
+        UUID video = seedVideo(newChannel(), "READY", "UNLISTED", "link only");
+        withThumbnail(video);
+
+        mvc.perform(get("/api/v1/videos/" + video + "/thumbnail"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("public")));
+    }
+
+    @Test
+    void aPrivateThumbnailIsHiddenFromEveryoneButItsOwnerAndNeverSharedByCaches() throws Exception {
+        String owner = tag();
+        String stranger = tag();
+        register(owner).andExpect(status().isCreated());
+        register(stranger).andExpect(status().isCreated());
+        UUID video = seedVideo(channelOf(owner), "READY", "PRIVATE", "secret");
+        withThumbnail(video);
+        String url = "/api/v1/videos/" + video + "/thumbnail";
+
+        mvc.perform(get(url)).andExpect(status().isNotFound());
+        mvc.perform(get(url).session(loginSession(stranger))).andExpect(status().isNotFound());
+        mvc.perform(get(url).session(loginSession(owner)))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("private"),
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("public")))));
+    }
+
+    @Test
+    void noThumbnailOrNotReadyIs404() throws Exception {
+        UUID channel = newChannel();
+        UUID without = seedVideo(channel, "READY", "PUBLIC", "no picture yet");
+        UUID processing = seedVideo(channel, "PROCESSING", "PUBLIC", "still processing");
+        withThumbnail(processing);
+
+        mvc.perform(get("/api/v1/videos/" + without + "/thumbnail")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/videos/" + processing + "/thumbnail")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/videos/" + UUID.randomUUID() + "/thumbnail")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void feedChannelPageAndDetailsLinkToTheThumbnailOnlyWhenThereIsOne() throws Exception {
+        String owner = tag();
+        register(owner).andExpect(status().isCreated());
+        UUID channel = channelOf(owner);
+        UUID pictured = seedVideo(channel, "READY", "PUBLIC", "pictured");
+        UUID plain = seedVideo(channel, "READY", "PUBLIC", "plain");
+        UUID processing = seedVideo(channel, "PROCESSING", "PRIVATE", "processing");
+        withThumbnail(pictured);
+        withThumbnail(processing);
+        String link = "/api/v1/videos/" + pictured + "/thumbnail";
+
+        mvc.perform(get("/api/v1/videos"))
+                .andExpect(jsonPath("$.items[?(@.videoId=='" + pictured + "')].thumbnailUrl").value(link))
+                .andExpect(jsonPath("$.items[?(@.videoId=='" + plain + "')].thumbnailUrl").value((Object) null));
+        mvc.perform(get("/api/v1/videos/" + pictured)).andExpect(jsonPath("$.thumbnailUrl").value(link));
+        mvc.perform(get("/api/v1/videos/" + plain)).andExpect(jsonPath("$.thumbnailUrl").isEmpty());
+        // The owner's list includes the unfinished one, but it must not link to a 404.
+        mvc.perform(get("/api/v1/channels/" + handle(owner)).session(loginSession(owner)))
+                .andExpect(jsonPath("$.videos.items[?(@.videoId=='" + processing + "')].thumbnailUrl").value((Object) null));
+    }
+
+    // Marks the video as having a thumbnail and makes the mocked storage return its bytes.
+    private byte[] withThumbnail(UUID video) throws Exception {
+        byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, 1, 2, 3, (byte) 0xFF, (byte) 0xD9};
+        jdbc.update("UPDATE videos SET thumbnail_path = ? WHERE video_id = ?", "videos/" + video + "/thumbnail.jpg", video);
+        GetObjectResponse stored = mock(GetObjectResponse.class);
+        when(stored.readAllBytes()).thenReturn(jpeg);
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(stored);
+        return jpeg;
     }
 
     // ---------------------------------------------------------------- helpers

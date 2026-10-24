@@ -43,6 +43,10 @@ public class Video {
     @Column(insertable = false, updatable = false)
     private long viewCount;
 
+    // Read-only for the same reason as viewCount: only the worker's targeted UPDATE writes it.
+    @Column(insertable = false, updatable = false)
+    private String thumbnailPath;
+
     // Left out of INSERT/UPDATE so the column's DEFAULT now() applies;
     // otherwise Hibernate would send NULL and violate NOT NULL.
     @Column(insertable = false, updatable = false)

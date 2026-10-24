@@ -43,4 +43,16 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Transactional
     @Query(nativeQuery = true, value = "UPDATE videos SET view_count = view_count + :delta WHERE video_id = :id")
     int addViews(UUID id, long delta);
+
+    // Set by the transcode worker after probing the source. Targeted updates, not a
+    // JPA save, so a worker never rewrites columns another writer changed meanwhile.
+    @Modifying
+    @Transactional
+    @Query(nativeQuery = true, value = "UPDATE videos SET duration_secs = :seconds WHERE video_id = :id")
+    int setDuration(UUID id, int seconds);
+
+    @Modifying
+    @Transactional
+    @Query(nativeQuery = true, value = "UPDATE videos SET thumbnail_path = :path WHERE video_id = :id")
+    int setThumbnailPath(UUID id, String path);
 }

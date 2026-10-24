@@ -21,7 +21,7 @@ RUN apt-get update \
 
 # Fail fast and loudly at build time if the binary is not actually usable,
 # rather than at 2am when the first job dead-letters.
-RUN ffmpeg -version
+RUN ffmpeg -version && ffprobe -version
 
 # Run as non-root. The worker executes a subprocess on user-supplied media --
 # a decoder bug in ffmpeg on a malicious upload is a real (if unlikely) path to

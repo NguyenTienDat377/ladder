@@ -92,6 +92,7 @@ public class SecurityConfig {
                         // Anyone may ask to watch; VideoAccess decides per video
                         // (private ones answer 404 to everybody without the permission).
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/master.m3u8").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/thumbnail").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/*/playlist.m3u8").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/videos/*/view").permitAll()
                         // The read side: feed, video details, channel pages. Each service

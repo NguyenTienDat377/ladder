@@ -39,16 +39,37 @@ public class PlaybackService {
         return readObject(StorageKeys.masterPlaylistKey(id));
     }
 
+    /** The thumbnail JPEG and whether caches may share it between users. */
+    public record Thumbnail(byte[] bytes, boolean shareable) {
+    }
+
+    /** @param userId the logged-in user, or null for an anonymous visitor */
+    public Thumbnail thumbnail(UUID id, UUID userId) {
+        Video video = videoAccess.requireWatchable(id, userId);
+        if (video.getThumbnailPath() == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "no thumbnail");
+        }
+        // A shared cache (browser, later a CDN) may keep PUBLIC and UNLISTED
+        // thumbnails for anyone, but must not serve a PRIVATE one to someone
+        // who isn't allowed to see it.
+        return new Thumbnail(readBytes(video.getThumbnailPath()), !"PRIVATE".equals(video.getVisibility()));
+    }
+
     private String readObject(String key) {
+        return new String(readBytes(key), StandardCharsets.UTF_8);
+    }
+
+    private byte[] readBytes(String key) {
         try (GetObjectResponse in = minioClient.getObject(GetObjectArgs.builder()
                 .bucket(storageProperties.bucket())
                 .object(key)
                 .build())) {
-                    return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            return in.readAllBytes();
         } catch (MinioException | IOException e) {
             throw new IllegalStateException("could not read " + key, e);
         }
     }
+
     public String renditionPlaylist(UUID id, String resolution, UUID userId) {
         Rendition rendition = Rendition.fromLabel(resolution)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));

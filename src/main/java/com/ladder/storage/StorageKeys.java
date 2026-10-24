@@ -18,6 +18,11 @@ public final class StorageKeys {
         return "videos/" + videoId + "/master.m3u8";
     }
 
+    // One JPEG per video, written by the transcode worker.
+    public static String thumbnailKey(UUID videoId) {
+        return "videos/" + videoId + "/thumbnail.jpg";
+    }
+
     // Ends with "/": callers append file names (playlist.m3u8, segment_000.ts).
     public static String renditionPrefix(UUID videoId, String resolution) {
         return "videos/" + videoId + "/" + resolution + "/";

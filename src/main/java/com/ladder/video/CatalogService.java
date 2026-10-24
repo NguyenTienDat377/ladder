@@ -58,7 +58,7 @@ public class CatalogService {
         // The access rule lives in one place; a refusal is already a 404.
         Video video = videoAccess.requireWatchable(videoId, userId);
         return jdbc.queryForObject("""
-                SELECT v.title, v.description, v.visibility, v.status, v.created_at, v.duration_secs,
+                SELECT v.title, v.description, v.visibility, v.status, v.created_at, v.duration_secs, v.thumbnail_path,
                        v.like_count, v.dislike_count,
                        c.channel_id, c.channel_name, c.channel_handle, c.subscriber_count,
                        r.reaction
@@ -68,7 +68,7 @@ public class CatalogService {
                 """,
                 (rs, row) -> new VideoDetailsResponse(videoId, rs.getString("title"), rs.getString("description"),
                         rs.getString("visibility"), rs.getString("status"), instant(rs.getObject("created_at", OffsetDateTime.class)),
-                        (Integer) rs.getObject("duration_secs"),
+                        (Integer) rs.getObject("duration_secs"), thumbnailUrl(videoId, "READY", rs.getString("thumbnail_path")),
                         // Stored count plus the views still waiting in Redis.
                         viewCounts.displayedCount(video), rs.getLong("like_count"), rs.getLong("dislike_count"),
                         new ChannelInfo(rs.getObject("channel_id", UUID.class), rs.getString("channel_name"),
@@ -85,7 +85,7 @@ public class CatalogService {
         // grow the way OFFSET does. One extra row says whether another page exists.
         // The literal status/visibility conditions must match the partial index.
         List<Item> rows = jdbc.query("""
-                SELECT v.video_id, v.title, v.created_at, v.duration_secs, v.view_count, v.status, v.visibility,
+                SELECT v.video_id, v.title, v.created_at, v.duration_secs, v.view_count, v.status, v.visibility, v.thumbnail_path,
                        c.channel_name, c.channel_handle
                 FROM videos v JOIN channels c ON c.channel_id = v.channel_id
                 WHERE v.status = 'READY' AND v.visibility = 'PUBLIC' AND v.video_id < ?
@@ -119,7 +119,7 @@ public class CatalogService {
         boolean canManage = permissions.has(userId, channel.channelId(), "video.view_private");
         int size = clamp(limit);
         List<Item> rows = jdbc.query("""
-                SELECT v.video_id, v.title, v.created_at, v.duration_secs, v.view_count, v.status, v.visibility,
+                SELECT v.video_id, v.title, v.created_at, v.duration_secs, v.view_count, v.status, v.visibility, v.thumbnail_path,
                        c.channel_name, c.channel_handle
                 FROM videos v JOIN channels c ON c.channel_id = v.channel_id
                 WHERE v.channel_id = ? AND v.video_id < ?
@@ -156,13 +156,22 @@ public class CatalogService {
                 request.title(), request.description(), request.visibility(), videoId);
     }
 
-    private static final RowMapper<Item> ITEM = (rs, row) -> new Item(
-            rs.getObject("video_id", UUID.class), rs.getString("title"),
-            instant(rs.getObject("created_at", OffsetDateTime.class)), (Integer) rs.getObject("duration_secs"),
-            // The stored count only: asking Redis for every row of a page would be one
-            // round trip per video, and a feed number a minute behind is fine.
-            rs.getLong("view_count"), rs.getString("channel_name"), rs.getString("channel_handle"),
-            rs.getString("status"), rs.getString("visibility"), null);
+    private static final RowMapper<Item> ITEM = (rs, row) -> {
+        UUID id = rs.getObject("video_id", UUID.class);
+        String status = rs.getString("status");
+        return new Item(id, rs.getString("title"),
+                instant(rs.getObject("created_at", OffsetDateTime.class)), (Integer) rs.getObject("duration_secs"),
+                // The stored count only: asking Redis for every row of a page would be one
+                // round trip per video, and a feed number a minute behind is fine.
+                rs.getLong("view_count"), rs.getString("channel_name"), rs.getString("channel_handle"),
+                status, rs.getString("visibility"), thumbnailUrl(id, status, rs.getString("thumbnail_path")));
+    };
+
+    // Only READY videos can serve their thumbnail (the endpoint uses the same
+    // watch rule), so an owner's PROCESSING row must not link to a 404.
+    private static String thumbnailUrl(UUID videoId, String status, String thumbnailPath) {
+        return thumbnailPath != null && "READY".equals(status) ? "/api/v1/videos/" + videoId + "/thumbnail" : null;
+    }
 
     // Rows were fetched with limit + 1: the extra one only proves there's a next page.
     private static VideoPage page(List<Item> rows, int size) {

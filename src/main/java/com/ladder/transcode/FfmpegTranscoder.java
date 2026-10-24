@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
@@ -64,8 +65,16 @@ public class FfmpegTranscoder {
      * Generous, but bounded. A stuck ffmpeg must not pin a worker forever.
      * Kept under RabbitMQ's default consumer_timeout (30 min): past that the
      * broker closes the channel and redelivers the job while ffmpeg still runs.
+     *
+     * The 240p job runs THREE processes in a row (probe, thumbnail, transcode),
+     * so the budget is shared: the probe and the thumbnail get a minute each
+     * (they read metadata and decode one frame, a second or two normally), and
+     * 1 + 1 + 25 = 27 minutes stays under the broker's 30. Without their own
+     * short limit a hung probe would eat the transcode's 25 minutes and the job
+     * could overrun the broker's, which redelivers outside our retry count.
      */
     private static final Duration TIMEOUT = Duration.ofMinutes(25);
+    private static final Duration MEDIA_TIMEOUT = Duration.ofMinutes(1);
 
     /** How much of ffmpeg's output to keep for the error message. */
     private static final int LOG_TAIL_BYTES = 8192;
@@ -133,10 +142,11 @@ public class FfmpegTranscoder {
             outputDir.resolve("playlist.m3u8").toString()
         ));
 
-        run(cmd, r.label());
+        run(cmd, r.label(), TIMEOUT);
     }
 
-    private void run(List<String> cmd, String label) {
+    /** Runs the command; returns the tail of its combined output (for ffprobe that is its answer). */
+    private String run(List<String> cmd, String label, Duration timeout) {
         log.info("ffmpeg start [{}]: {}", label, String.join(" ", cmd));
 
         // ====================================================================
@@ -173,7 +183,7 @@ public class FfmpegTranscoder {
 
             boolean finished;
             try {
-                finished = process.waitFor(TIMEOUT.toMinutes(), TimeUnit.MINUTES);
+                finished = process.waitFor(timeout.toSeconds(), TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 process.destroyForcibly();
                 // Restore the flag -- swallowing it breaks graceful shutdown, and the
@@ -185,7 +195,7 @@ public class FfmpegTranscoder {
             if (!finished) {
                 process.destroyForcibly();
                 throw new TranscodeException(
-                    "ffmpeg exceeded " + TIMEOUT.toMinutes() + "min [" + label + "]\n" + tail(logFile));
+                    "ffmpeg exceeded " + timeout.toSeconds() + "s [" + label + "]\n" + tail(logFile));
             }
 
             int exit = process.exitValue();
@@ -195,13 +205,64 @@ public class FfmpegTranscoder {
                 throw new TranscodeException("ffmpeg exited " + exit + " [" + label + "]\n" + tail(logFile));
             }
 
+            String output = tail(logFile);
             log.info("ffmpeg done [{}]", label);
+            return output;
         } finally {
             try {
                 Files.deleteIfExists(logFile);
             } catch (IOException e) {
                 log.warn("could not delete ffmpeg log {}", logFile, e);
             }
+        }
+    }
+
+    /**
+     * Length of the source in whole seconds, or null when ffprobe can't tell
+     * (some containers report no duration at all, printing "N/A").
+     *
+     * Rounded to the nearest second, which is what players display, with a
+     * floor of 1 so even a 0.4s clip has a duration.
+     */
+    public Integer probeDurationSecs(Path source) {
+        // -v error: print nothing but errors, so the whole output is the number.
+        String output = run(List.of("ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", source.toString()), "probe", MEDIA_TIMEOUT);
+        try {
+            double seconds = Double.parseDouble(output.trim());
+            if (!Double.isFinite(seconds) || seconds <= 0) {
+                return null;
+            }
+            return (int) Math.max(1, Math.round(seconds));
+        } catch (NumberFormatException e) {
+            return null; // "N/A" or an error line
+        }
+    }
+
+    /**
+     * Writes one JPEG frame of the source to {@code target}, at most 640px wide
+     * (never upscaled), aspect ratio kept.
+     *
+     * The frame is taken a quarter of the way in: the first frame is often a
+     * black or fading-in intro, and a fixed offset like 10s would fall outside
+     * a short clip. Unknown duration falls back to the first frame.
+     */
+    public void captureThumbnail(Path source, Path target, Integer durationSecs) {
+        double at = durationSecs == null ? 0 : durationSecs * 0.25;
+        run(List.of("ffmpeg", "-nostdin", "-y",
+                // -ss BEFORE -i: seeks by keyframe instead of decoding up to that point.
+                "-ss", String.format(Locale.ROOT, "%.2f", at), "-i", source.toString(),
+                "-frames:v", "1",
+                // min(640,iw): shrink wide sources, leave small ones alone. -2 keeps the height even.
+                "-vf", "scale='min(640,iw)':-2",
+                "-q:v", "3", // JPEG quality, 2 (best) to 31 (worst)
+                target.toString()), "thumbnail", MEDIA_TIMEOUT);
+        try {
+            if (!Files.exists(target) || Files.size(target) == 0) {
+                throw new TranscodeException("ffmpeg produced no thumbnail (seek past the end?)");
+            }
+        } catch (IOException e) {
+            throw new TranscodeException("could not read the thumbnail ffmpeg wrote", e);
         }
     }
 

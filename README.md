@@ -72,6 +72,14 @@ Two workers can finish the last renditions at the same moment. No lock is needed
 
 *Built* — [`TranscodeCoordinator`](src/main/java/com/ladder/transcode/TranscodeCoordinator.java). Verified: FFmpeg opens the master as a four-variant adaptive stream and every rendition decodes cleanly. The concurrent-finish case is reasoned, not yet tested (workers currently run one at a time).
 
+### Duration and the thumbnail come from the 240p job
+
+Exactly one job per video, the lowest rung's, runs `ffprobe` on the source for the duration and cuts one JPEG frame a quarter of the way in (the first frame is often a black intro, and a fixed offset would fall outside a short clip). It happens *before* that job's row is upserted, and a video turns READY only when all four rows exist, so a READY video already has both. They are extras: if probing or ffmpeg fails, the job logs a warning and carries on, because failing would retry and eventually dead-letter a transcode that is fine. Redelivery is safe (a fixed storage key, and the database writes SET values).
+
+The picture is served by the API, `GET /api/v1/videos/{id}/thumbnail`, not through a presigned storage URL: a presigned URL changes on every request, so no browser or CDN could ever cache it. The API sends an ETag (a repeat visit is a 304) and `Cache-Control: public, max-age=3600` for PUBLIC and UNLISTED videos, `private` for PRIVATE ones, under the same watch rule as playback.
+
+*Built* ([`FfmpegTranscoder`](src/main/java/com/ladder/transcode/FfmpegTranscoder.java), [`TranscodeWorker`](src/main/java/com/ladder/transcode/TranscodeWorker.java)). Videos transcoded before this existed have neither; to backfill one, republish its `TranscodeJob(videoId, "240p")` (the re-run is a no-op for the rest, the upsert and the READY flip are idempotent). No script for that yet.
+
 ### Keyframes are pinned so renditions align
 
 A player can only switch rendition at a keyframe, so every rendition must have keyframes at identical timestamps. FFmpeg's default places them at scene changes, which differ per resolution. The encoder pins a keyframe every 48 frames with scene-cut detection off (`-g 48 -keyint_min 48 -sc_threshold 0`); 48 frames at 24fps is 2s, which divides the 10s segment evenly.

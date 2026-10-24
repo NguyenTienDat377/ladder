@@ -5,6 +5,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -66,6 +67,12 @@ public class TranscodeWorker {
             Files.createDirectory(outputDir);
 
             download(StorageKeys.sourceKey(job.videoId()), source);
+            // Once per video, in the lowest rung's job, BEFORE its row is upserted:
+            // a video turns READY only when all four rows exist, so by then the
+            // duration and thumbnail are already there.
+            if (rendition.equals(Rendition.LADDER.get(0))) {
+                recordDurationAndThumbnail(job.videoId(), source, workDir);
+            }
             transcoder.transcode(source, outputDir, rendition);
 
             String prefix = StorageKeys.renditionPrefix(job.videoId(), rendition.label());
@@ -86,6 +93,40 @@ public class TranscodeWorker {
             // Always clean up: a 4K source plus four renditions is several GB,
             // and a worker that leaks temp dirs fills its disk within a day.
             deleteQuietly(workDir);
+        }
+    }
+
+    /**
+     * Reads the source's duration and cuts one thumbnail frame. Both are
+     * extras: if probing, ffmpeg or the upload fails, the video simply has no
+     * duration or thumbnail. Failing here would retry and eventually
+     * dead-letter a transcode that is otherwise fine.
+     *
+     * Safe to run again on redelivery: a fixed storage key, and the database
+     * writes SET values rather than add to them.
+     */
+    private void recordDurationAndThumbnail(UUID videoId, Path source, Path workDir) {
+        try {
+            Integer duration = transcoder.probeDurationSecs(source);
+            if (duration != null) {
+                videos.setDuration(videoId, duration);
+            }
+            // In workDir, NOT in "out/": uploadAll sends everything in out/ as a rendition file.
+            Path thumbnail = workDir.resolve("thumbnail.jpg");
+            transcoder.captureThumbnail(source, thumbnail, duration);
+            String key = StorageKeys.thumbnailKey(videoId);
+            minioClient.uploadObject(UploadObjectArgs.builder()
+                    .bucket(storage.bucket())
+                    .object(key)
+                    .filename(thumbnail.toString())
+                    .contentType("image/jpeg")
+                    .build());
+            videos.setThumbnailPath(videoId, key);
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt(); // keep the shutdown signal
+            }
+            log.warn("no duration/thumbnail for video {}: {}", videoId, e.toString());
         }
     }
 

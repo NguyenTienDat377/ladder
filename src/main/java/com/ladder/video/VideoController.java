@@ -2,8 +2,12 @@ package com.ladder.video;
 
 import java.security.Principal;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,6 +28,7 @@ import com.ladder.video.dto.ViewCountResponse;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.util.DigestUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 
 
@@ -81,6 +86,24 @@ public class VideoController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void completeUpload(@PathVariable UUID id, Principal principal) {
         videoService.completeUpload(id, CurrentUser.idOrNull(principal));
+    }
+
+    // Proxied through the API instead of a presigned storage URL: a presigned
+    // URL changes on every request, so no browser or CDN could ever cache the
+    // picture. Here the bytes carry an ETag (a repeat visit gets a 304) and a
+    // Cache-Control that matches who may see the video.
+    @GetMapping("/{id}/thumbnail")
+    public ResponseEntity<byte[]> thumbnail(@PathVariable UUID id, Principal principal) {
+        PlaybackService.Thumbnail thumbnail = playbackService.thumbnail(id, CurrentUser.idOrNull(principal));
+        CacheControl cache = thumbnail.shareable()
+                // An hour: how long a cache can keep serving it after the video turns PRIVATE.
+                ? CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic()
+                : CacheControl.noCache().cachePrivate();
+        return ResponseEntity.ok()
+                .cacheControl(cache)
+                .eTag(DigestUtils.md5DigestAsHex(thumbnail.bytes()))
+                .contentType(MediaType.IMAGE_JPEG)
+                .body(thumbnail.bytes());
     }
 
     @GetMapping(value = "/{id}/master.m3u8", produces = "application/vnd.apple.mpegurl")
