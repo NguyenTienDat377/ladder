@@ -29,6 +29,8 @@ public class Video {
     @Column(nullable = false)
     private String title;
 
+    private String description;
+
     @Column(nullable = false)
     private String status;
 

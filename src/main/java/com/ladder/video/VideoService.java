@@ -55,6 +55,7 @@ public class VideoService {
         Video video = new Video();
         video.setChannelId(request.channelId());
         video.setTitle(request.title());
+        video.setDescription(request.description());
         // Set explicitly: Hibernate writes every mapped column, so a null here
         // would override the DB default and fail NOT NULL.
         video.setStatus("UPLOADING");

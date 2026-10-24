@@ -4,15 +4,21 @@ import java.security.Principal;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ladder.security.CurrentUser;
 import com.ladder.video.dto.VideoCreateRequest;
+import com.ladder.video.dto.VideoDetailsResponse;
+import com.ladder.video.dto.VideoPage;
+import com.ladder.video.dto.VideoUpdateRequest;
+import com.ladder.video.dto.VideoUpdateResponse;
 import com.ladder.video.dto.VideoCreateResponse;
 import com.ladder.video.dto.ViewCountResponse;
 
@@ -27,12 +33,32 @@ public class VideoController {
     private final PlaybackService playbackService;
     private final VideoService videoService;
     private final ViewCountService viewCountService;
+    private final CatalogService catalog;
 
     public VideoController(VideoService videoService, PlaybackService playbackService,
-                           ViewCountService viewCountService) {
+                           ViewCountService viewCountService, CatalogService catalog) {
         this.videoService = videoService;
         this.playbackService = playbackService;
         this.viewCountService = viewCountService;
+        this.catalog = catalog;
+    }
+
+    // The home feed. "before" = the nextBefore of the previous page; absent = the first page.
+    @GetMapping
+    public VideoPage feed(@RequestParam(required = false) UUID before,
+                          @RequestParam(defaultValue = "" + CatalogService.DEFAULT_LIMIT) int limit) {
+        return catalog.feed(before, limit);
+    }
+
+    @GetMapping("/{id}")
+    public VideoDetailsResponse details(@PathVariable UUID id, Principal principal) {
+        return catalog.details(id, CurrentUser.idOrNull(principal));
+    }
+
+    @PatchMapping("/{id}")
+    public VideoUpdateResponse update(@PathVariable UUID id, @Valid @RequestBody VideoUpdateRequest request,
+                                      Principal principal) {
+        return catalog.update(id, request, CurrentUser.idOrNull(principal));
     }
 
     // Viewer = the login when there is one, else the client address (so

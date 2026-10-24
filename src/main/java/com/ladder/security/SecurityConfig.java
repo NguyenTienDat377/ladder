@@ -94,6 +94,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/master.m3u8").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/*/playlist.m3u8").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/videos/*/view").permitAll()
+                        // The read side: feed, video details, channel pages. Each service
+                        // method decides per video what the caller may see.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/videos", "/api/v1/videos/*", "/api/v1/channels/*").permitAll()
                         .anyRequest().authenticated())
                 // Remembering "the page you wanted before login" costs a server
                 // session per anonymous 401, and /me runs on every page load. An

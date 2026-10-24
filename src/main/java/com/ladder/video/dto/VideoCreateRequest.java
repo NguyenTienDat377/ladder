@@ -11,5 +11,6 @@ public record VideoCreateRequest(
         @NotNull UUID channelId,
         @NotBlank @Size(max = 200) String title,
         // Optional: omitted means PRIVATE, so an upload is never public by accident.
-        @Pattern(regexp = "PUBLIC|UNLISTED|PRIVATE") String visibility) {
+        @Pattern(regexp = "PUBLIC|UNLISTED|PRIVATE") String visibility,
+        @Size(max = 5000) String description) {
 }
