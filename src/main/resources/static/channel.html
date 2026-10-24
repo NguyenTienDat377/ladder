@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ladder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f0f0f'/%3E%3Cpath d='M8 4v16M16 4v16M8 8h8M8 12h8M8 16h8' stroke='%23f5c400' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page" id="main">
+    <section class="channel-head" id="head"></section>
+    <div class="grid" id="grid" aria-busy="true"></div>
+    <div class="more" id="more"></div>
+  </main>
+
+  <script type="module">
+    const { el, icon, avatar, api, header, videoCard, emptyState, loginUrl, notice, count, VISIBILITY } = Ladder;
+
+    const main = document.getElementById('main');
+    const grid = document.getElementById('grid');
+    const more = document.getElementById('more');
+    const handle = new URLSearchParams(location.search).get('handle') || '';
+    const user = await header();
+    const path = `/api/v1/channels/${encodeURIComponent(handle)}`;
+
+    let channel;
+    try {
+      channel = await api('GET', path + '?limit=24');
+    } catch (error) {
+      notice(main, error.status === 404 ? 'This channel doesn’t exist' : 'Something went wrong',
+        error.status === 404 ? 'Check the link, or find it from a video.' : 'The channel couldn’t be loaded. Try again in a moment.',
+        el('a', { class: 'btn', href: '/' }, 'Go to the home page'));
+    }
+
+    if (channel) {
+      document.title = channel.channelName + ' - ladder';
+      renderHead();
+      grid.removeAttribute('aria-busy');
+      showPage(channel.videos);
+      if (!channel.videos.items.length) {
+        grid.replaceWith(channel.canManage
+          ? emptyState('You haven’t uploaded anything yet', 'Your videos show up here, including private ones only you can see.',
+              el('a', { class: 'btn btn-primary', href: '/upload.html' }, icon('plus'), 'Upload a video'))
+          : emptyState('No videos yet', 'This channel hasn’t published anything public.'));
+      }
+    }
+
+    function renderHead() {
+      const subscribers = el('span', { text: count(channel.subscriberCount, 'subscriber', 'subscribers') });
+      const stats = el('p', { class: 'channel-sub' }, '@' + channel.channelHandle + ' · ', subscribers,
+        ' · ' + count(channel.publicVideoCount, 'video', 'videos'));
+
+      let action;
+      if (channel.canManage) {
+        action = el('a', { class: 'btn btn-primary btn-lg', href: '/upload.html' }, icon('plus'), 'Upload a video');
+      } else {
+        action = el('button', { class: 'btn btn-lg subscribe', type: 'button' });
+        const paint = on => {
+          action.setAttribute('aria-pressed', String(on));
+          action.classList.toggle('btn-primary', !on);
+          action.textContent = on ? 'Subscribed' : 'Subscribe';
+        };
+        paint(channel.subscribed);
+        action.addEventListener('click', async () => {
+          if (!user) return void (location.href = loginUrl());
+          const on = action.getAttribute('aria-pressed') === 'true';
+          action.disabled = true;
+          try {
+            const result = await api(on ? 'DELETE' : 'PUT', path + '/subscription');
+            paint(result.subscribed);
+            subscribers.textContent = count(result.subscriberCount, 'subscriber', 'subscribers');
+          } catch (error) {
+            if (error.status === 401) location.href = loginUrl();
+          } finally {
+            action.disabled = false;
+          }
+        });
+      }
+
+      document.getElementById('head').append(
+        avatar(channel.channelName, channel.channelHandle, 'xl'),
+        el('div', { class: 'channel-info' }, el('h1', { text: channel.channelName }), stats),
+        action);
+    }
+
+    function showPage(page) {
+      for (const item of page.items) {
+        const card = videoCard(item, { showChannel: false });
+        if (channel.canManage) card.append(manageRow(item));
+        grid.append(card);
+      }
+      more.replaceChildren(page.nextBefore
+        ? el('button', { class: 'btn btn-lg', type: 'button', onclick: async event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            try {
+              showPage((await api('GET', `${path}?limit=24&before=${page.nextBefore}`)).videos);
+            } catch {
+              button.disabled = false;
+            }
+          } }, 'Show more')
+        : '');
+    }
+
+    // The owner's controls under each card: what state it's in and who can see it.
+    function manageRow(item) {
+      const row = el('div', { class: 'manage' });
+      if (item.status === 'FAILED') {
+        row.append(el('span', { class: 'status-chip failed' }, icon('alert', 14), 'Processing failed'));
+      } else if (item.status !== 'READY') {
+        row.append(el('span', { class: 'status-chip' }, icon('clock', 14), 'Processing'));
+      }
+      const select = el('select', { class: 'select', 'aria-label': 'Who can watch “' + item.title + '”' },
+        ...Object.entries(VISIBILITY).map(([value, v]) =>
+          el('option', { value, selected: value === item.visibility }, v.label)));
+      const saved = el('span', { class: 'card-sub', role: 'status' });
+      select.addEventListener('change', async () => {
+        const previous = item.visibility;
+        select.disabled = true;
+        saved.textContent = '';
+        try {
+          item.visibility = (await api('PATCH', `/api/v1/videos/${item.videoId}`, { json: { visibility: select.value } })).visibility;
+          saved.textContent = 'Saved';
+        } catch {
+          select.value = previous;
+          saved.textContent = 'Couldn’t save. Try again.';
+        } finally {
+          select.disabled = false;
+        }
+      });
+      row.append(select, saved);
+      return row;
+    }
+  </script>
+</body>
+</html>

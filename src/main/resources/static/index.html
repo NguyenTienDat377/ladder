@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ladder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f0f0f'/%3E%3Cpath d='M8 4v16M16 4v16M8 8h8M8 12h8M8 16h8' stroke='%23f5c400' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <div class="page with-sidebar">
+    <aside class="sidebar" id="sidebar" aria-label="Navigation"></aside>
+    <main class="main" id="main">
+      <h1 class="visually-hidden">Latest videos</h1>
+      <div class="grid" id="grid" aria-busy="true"></div>
+      <div class="more" id="more"></div>
+    </main>
+  </div>
+
+  <script type="module">
+    const { el, icon, avatar, api, header, videoCard, emptyState, loginUrl, notice } = Ladder;
+
+    const user = await header();
+    const main = document.getElementById('main');
+    const grid = document.getElementById('grid');
+    const more = document.getElementById('more');
+
+    // ---- sidebar: home, your channel, the channels you subscribe to
+    const sidebar = document.getElementById('sidebar');
+    sidebar.append(el('a', { class: 'side-link', href: '/', 'aria-current': 'page' }, icon('home'), el('span', { text: 'Home' })));
+    const mine = user && user.channels[0];
+    if (mine) {
+      sidebar.append(el('a', { class: 'side-link', href: '/channel.html?handle=' + encodeURIComponent(mine.channelHandle) },
+        icon('channel'), el('span', { text: 'Your channel' })));
+    }
+    sidebar.append(el('h2', { text: 'Subscriptions' }));
+    if (!user) {
+      sidebar.append(el('p', { class: 'side-note' }, el('a', { href: loginUrl(), text: 'Sign in' }), ' to subscribe to channels.'));
+    } else {
+      api('GET', '/api/v1/subscriptions').then(channels => {
+        if (!channels.length) {
+          sidebar.append(el('p', { class: 'side-note', text: 'Channels you subscribe to show up here.' }));
+        }
+        for (const channel of channels) {
+          sidebar.append(el('a', { class: 'side-link', href: '/channel.html?handle=' + encodeURIComponent(channel.channelHandle) },
+            avatar(channel.channelName, channel.channelHandle, 'sm'), el('span', { text: channel.channelName })));
+        }
+      }).catch(() => {});
+    }
+
+    // ---- the feed: newest public videos, "Show more" asks for the page older than the last one
+    async function load(before) {
+      const page = await api('GET', '/api/v1/videos?limit=24' + (before ? '&before=' + before : ''));
+      grid.append(...page.items.map(item => videoCard(item)));
+      more.replaceChildren(page.nextBefore
+        ? el('button', { class: 'btn btn-lg', type: 'button', onclick: event => {
+            const button = event.currentTarget; // null once the handler has returned
+            button.disabled = true;
+            load(page.nextBefore).catch(() => { button.disabled = false; });
+          } }, 'Show more')
+        : '');
+      return page;
+    }
+
+    try {
+      const first = await load();
+      grid.removeAttribute('aria-busy');
+      if (!first.items.length) {
+        main.replaceChildren(emptyState('Nothing to watch yet', 'Public videos show up here as soon as they finish processing.',
+          user ? el('a', { class: 'btn btn-primary', href: '/upload.html' }, icon('plus'), 'Upload the first one')
+               : el('a', { class: 'btn btn-primary', href: loginUrl() }, 'Sign in to upload')));
+      }
+    } catch {
+      notice(main, 'The videos couldn’t be loaded', 'Check that the server is running, then try again.',
+        el('button', { class: 'btn', type: 'button', onclick: () => location.reload() }, 'Try again'));
+    }
+  </script>
+</body>
+</html>

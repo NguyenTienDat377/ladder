@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Upload - ladder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f0f0f'/%3E%3Cpath d='M8 4v16M16 4v16M8 8h8M8 12h8M8 16h8' stroke='%23f5c400' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page" id="main">
+    <div class="panel panel-wide" id="panel">
+      <h1>Upload a video</h1>
+      <p class="panel-lead">It plays in four qualities once processing finishes, usually a few minutes.</p>
+
+      <form class="form" id="form" novalidate>
+        <p class="form-error" id="error" role="alert" hidden></p>
+
+        <label class="drop" id="drop">
+          <span id="drop-icon"></span>
+          <strong id="drop-title">Choose a video file</strong>
+          <span class="hint" id="drop-hint">or drag it here</span>
+          <input id="file" name="file" type="file" accept="video/*" required>
+        </label>
+
+        <div class="field">
+          <label for="title">Title</label>
+          <input class="input" id="title" name="title" maxlength="200" required>
+        </div>
+
+        <div class="field">
+          <label for="description">Description <span class="hint">(optional)</span></label>
+          <textarea class="textarea" id="description" name="description" maxlength="5000"></textarea>
+        </div>
+
+        <fieldset class="field">
+          <legend>Who can watch it</legend>
+          <div class="choices" id="choices"></div>
+        </fieldset>
+
+        <button class="btn btn-primary btn-lg" type="submit" id="submit">Upload</button>
+      </form>
+    </div>
+  </main>
+
+  <script type="module">
+    const { el, icon, api, header, loginUrl, notice, VISIBILITY } = Ladder;
+
+    const main = document.getElementById('main');
+    const user = await header();
+    if (!user) location.replace(loginUrl());
+    const channel = user && user.channels[0];
+    if (user && !channel) notice(main, 'You don’t have a channel', 'Uploads go to a channel, and this account has none.');
+
+    const form = document.getElementById('form');
+    const fileInput = document.getElementById('file');
+    const titleInput = document.getElementById('title');
+    const errorBox = document.getElementById('error');
+    document.getElementById('drop-icon').append(icon('upload', 36));
+
+    // Private is the default, so nothing becomes public by accident.
+    document.getElementById('choices').append(...Object.entries(VISIBILITY).map(([value, v]) =>
+      el('label', { class: 'choice' },
+        el('input', { type: 'radio', name: 'visibility', value, checked: value === 'PRIVATE' }),
+        el('div', {}, el('strong', { text: v.label }), el('span', { text: v.help })))));
+
+    // ---- choosing a file (click or drag and drop)
+    function chose(file) {
+      if (!file) return;
+      document.getElementById('drop-title').textContent = file.name;
+      document.getElementById('drop-hint').textContent = (file.size / 1e6).toFixed(1) + ' MB · choose another';
+      if (!titleInput.value) titleInput.value = file.name.replace(/\.[^.]+$/, '').slice(0, 200);
+    }
+    fileInput.addEventListener('change', () => chose(fileInput.files[0]));
+    const drop = document.getElementById('drop');
+    drop.addEventListener('dragover', event => { event.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', event => {
+      event.preventDefault();
+      drop.classList.remove('over');
+      if (event.dataTransfer.files.length) {
+        fileInput.files = event.dataTransfer.files;
+        chose(fileInput.files[0]);
+      }
+    });
+
+    // ---- the upload: create the video, send the bytes straight to storage, then start processing
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      errorBox.hidden = true;
+      const file = fileInput.files[0];
+      if (!file) return showError('Choose a video file first.');
+      if (!titleInput.value.trim()) return showError('Give the video a title.');
+
+      const fields = new FormData(form);
+      document.getElementById('submit').disabled = true;
+      let created;
+      try {
+        created = await api('POST', '/api/v1/videos', { json: {
+          channelId: channel.channelId,
+          title: titleInput.value.trim(),
+          description: fields.get('description') || null,
+          visibility: fields.get('visibility'),
+        } });
+      } catch (error) {
+        document.getElementById('submit').disabled = false;
+        return showError(error.status === 401 ? 'Your session ended. Sign in again.' : 'The upload couldn’t start. Try again.');
+      }
+      track(created.videoId, file, created.uploadUrl);
+    });
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+    }
+
+    async function track(videoId, file, uploadUrl) {
+      const bar = el('div');
+      const steps = {
+        upload: el('div', { class: 'step active' }, el('span', { class: 'dot' }), el('span', { text: 'Uploading' })),
+        process: el('div', { class: 'step' }, el('span', { class: 'dot' }), el('span', { text: 'Processing into four qualities' })),
+        ready: el('div', { class: 'step' }, el('span', { class: 'dot' }), el('span', { text: 'Ready to watch' })),
+      };
+      const status = el('p', { class: 'hint', role: 'status' });
+      const actions = el('div', { class: 'actions' });
+      const heading = el('h1', { text: 'Uploading' });
+      document.getElementById('panel').replaceChildren(
+        heading, el('p', { class: 'panel-lead', text: file.name }),
+        el('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Upload progress',
+          'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0' }, bar),
+        el('div', { class: 'steps', style: 'margin-top:24px' }, steps.upload, steps.process, steps.ready),
+        el('div', { style: 'margin-top:20px; display:flex; flex-direction:column; gap:12px' }, status, actions));
+      const progress = bar.parentElement;
+      const channelUrl = '/channel.html?handle=' + encodeURIComponent(channel.channelHandle);
+      const leaving = event => { event.preventDefault(); };
+      window.addEventListener('beforeunload', leaving);
+
+      try {
+        await put(uploadUrl, file, fraction => {
+          bar.style.width = (fraction * 100).toFixed(1) + '%';
+          progress.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
+        });
+        await api('POST', `/api/v1/videos/${videoId}/complete`);
+      } catch {
+        window.removeEventListener('beforeunload', leaving);
+        steps.upload.className = 'step failed';
+        heading.textContent = 'Upload failed';
+        status.textContent = 'The upload didn’t finish. Check your connection and try again.';
+        actions.append(el('a', { class: 'btn', href: '/upload.html' }, 'Start over'));
+        return;
+      }
+      window.removeEventListener('beforeunload', leaving);
+      steps.upload.className = 'step done';
+      steps.process.className = 'step active';
+      heading.textContent = 'Processing';
+      status.textContent = 'You can leave this page; processing carries on and the video appears on your channel.';
+      actions.append(el('a', { class: 'btn', href: channelUrl }, 'Go to your channel'));
+
+      // Poll the owner's view of the channel until the video is READY or FAILED.
+      const deadline = Date.now() + 30 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        let item;
+        try {
+          const page = await api('GET', `/api/v1/channels/${encodeURIComponent(channel.channelHandle)}?limit=50`);
+          item = page.videos.items.find(v => v.videoId === videoId);
+        } catch {
+          continue;
+        }
+        if (item && item.status === 'READY') {
+          steps.process.className = 'step done';
+          steps.ready.className = 'step done';
+          heading.textContent = 'Ready to watch';
+          status.textContent = 'Done. ' + VISIBILITY[item.visibility].help;
+          actions.replaceChildren(
+            el('a', { class: 'btn btn-primary', href: '/watch.html?id=' + videoId }, 'Watch it'),
+            el('a', { class: 'btn', href: channelUrl }, 'Go to your channel'),
+            el('a', { class: 'btn btn-ghost', href: '/upload.html' }, 'Upload another'));
+          return;
+        }
+        if (item && item.status === 'FAILED') {
+          steps.process.className = 'step failed';
+          heading.textContent = 'Processing failed';
+          status.textContent = 'Processing failed. The file may not be a video ladder can read.';
+          actions.replaceChildren(el('a', { class: 'btn', href: '/upload.html' }, 'Try another file'));
+          return;
+        }
+      }
+      status.textContent = 'This is taking a while. It will appear on your channel when it’s done.';
+    }
+
+    // XMLHttpRequest, not fetch: fetch can't report upload progress. The URL is
+    // presigned for storage, so no cookie or CSRF header goes with it.
+    function put(url, file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('PUT', url);
+        if (file.type) request.setRequestHeader('Content-Type', file.type);
+        request.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+        request.onload = () => (request.status >= 200 && request.status < 300 ? resolve() : reject(new Error('storage ' + request.status)));
+        request.onerror = () => reject(new Error('network'));
+        request.send(file);
+      });
+    }
+  </script>
+</body>
+</html>

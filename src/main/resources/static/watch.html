@@ -4,440 +4,319 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ladder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f0f0f'/%3E%3Cpath d='M8 4v16M16 4v16M8 8h8M8 12h8M8 16h8' stroke='%23f5c400' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- One family; its width axis carries meaning (wider label = more bits). -->
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js"></script>
   <!-- Pinned: an unpinned URL can change under us and break playback. -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
-  <style>
-    :root {
-      /* Accents come from the SMPTE colour-bar test card. Each one means one
-         thing: yellow = the rung playing now, cyan = what the connection carries. */
-      --booth: #0f1e30;
-      --panel: #142739;
-      --rung: #3b5068;
-      --text: #e4e8ec;
-      --muted: #93a3b5;
-      --bar-yellow: #d9d200;
-      --bar-cyan: #00c3c8;
-    }
-
-    * { box-sizing: border-box; }
-
-    html {
-      background: var(--booth);
-      color: var(--text);
-      font-family: "Archivo", system-ui, sans-serif;
-    }
-
-    body { margin: 0; }
-
-    .page {
-      max-width: 76rem;
-      margin: 0 auto;
-      padding: 1.25rem 1.5rem 3rem;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 12rem;
-      grid-template-areas:
-        "brand   brand"
-        "screen  ladder"
-        "caption .";
-      gap: 1rem 1.5rem;
-    }
-
-    .brand {
-      grid-area: brand;
-      margin: 0;
-      font-size: 1.125rem;
-      font-weight: 800;
-      font-stretch: 125%;
-    }
-
-    .screen {
-      grid-area: screen;
-      position: relative;
-      aspect-ratio: 16 / 9;
-      background: #000;
-    }
-
-    video {
-      display: block;
-      width: 100%;
-      height: 100%;
-      background: #000;
-    }
-
-    .notice {
-      position: absolute;
-      inset: 0;
-      margin: 0;
-      padding: 2rem;
-      display: grid;
-      place-items: center;
-      text-align: center;
-      font-size: 1rem;
-      line-height: 1.5;
-      background: var(--booth);
-    }
-
-    .notice[hidden] { display: none; }
-
-    .caption {
-      grid-area: caption;
-      margin: 0;
-      max-width: 62ch;
-      color: var(--muted);
-      font-size: 0.9375rem;
-      line-height: 1.55;
-    }
-
-    /* The ladder: two rails, rungs placed at their real bitrate (log scale). */
-    .ladder {
-      grid-area: ladder;
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-
-    .ladder[hidden] { display: none; }
-
-    .track {
-      position: relative;
-      flex: 1;
-      min-height: 14rem;
-      border-left: 2px solid var(--rung);
-      border-right: 2px solid var(--rung);
-    }
-
-    .rung {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: calc(var(--pos) * 100%);
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 0.5rem;
-      margin: 0;
-      padding: 0 0.625rem 0.375rem;
-      background: none;
-      border: 0;
-      border-bottom: 2px solid var(--rung);
-      color: var(--muted);
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .rung:hover { color: var(--text); }
-
-    .res {
-      font-size: 1.25rem;
-      font-stretch: var(--stretch);
-      font-weight: 450;
-      line-height: 1;
-    }
-
-    .rate {
-      font-size: 0.75rem;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .rung.is-playing {
-      color: var(--bar-yellow);
-      border-bottom: 4px solid var(--bar-yellow);
-    }
-
-    .rung.is-playing .res { font-weight: 750; }
-
-    /* Measured bandwidth. The player plays the highest rung below this line. */
-    .reach {
-      position: absolute;
-      left: -0.5rem;
-      right: -0.5rem;
-      bottom: calc(var(--pos) * 100%);
-      border-bottom: 2px dashed var(--bar-cyan);
-      pointer-events: none;
-      transition: bottom 0.6s ease;
-    }
-
-    .reach[hidden] { display: none; }
-
-    .legend {
-      margin: 0;
-      display: grid;
-      gap: 0.5rem;
-      font-size: 0.8125rem;
-    }
-
-    .legend div {
-      display: flex;
-      justify-content: space-between;
-      gap: 0.75rem;
-    }
-
-    .legend dt {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: var(--muted);
-    }
-
-    .legend dd {
-      margin: 0;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .key {
-      width: 1.25rem;
-      border-bottom: 4px solid var(--bar-yellow);
-    }
-
-    .key-reach { border-bottom: 2px dashed var(--bar-cyan); }
-
-    .auto {
-      align-self: start;
-      padding: 0.375rem 0.875rem;
-      background: none;
-      border: 1px solid var(--rung);
-      border-radius: 3px;
-      color: var(--muted);
-      font: inherit;
-      font-size: 0.875rem;
-      cursor: pointer;
-    }
-
-    .auto[aria-pressed="true"] {
-      background: var(--panel);
-      border-color: var(--muted);
-      color: var(--text);
-    }
-
-    :focus-visible {
-      outline: 2px solid var(--bar-cyan);
-      outline-offset: 2px;
-    }
-
-    /* Narrow screens: the ladder lies on its side under the video,
-       lowest rung on the left. JS only sets --pos, so both layouts share it. */
-    @media (max-width: 48rem) {
-      .page {
-        padding: 1rem 1rem 2.5rem;
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-areas: "brand" "screen" "ladder" "caption";
-      }
-
-      .track {
-        flex: none;
-        min-height: 4.5rem;
-        border: 0;
-        border-top: 2px solid var(--rung);
-        border-bottom: 2px solid var(--rung);
-      }
-
-      .rung {
-        left: calc(var(--pos) * 100%);
-        right: auto;
-        top: 0;
-        bottom: 0;
-        flex-direction: column;
-        justify-content: center;
-        align-items: flex-start;
-        gap: 0.25rem;
-        padding: 0 0 0 0.375rem;
-        border-bottom: 0;
-        border-left: 2px solid var(--rung);
-      }
-
-      .rung.is-playing {
-        border-bottom: 0;
-        border-left: 4px solid var(--bar-yellow);
-      }
-
-      .res { font-size: 0.9375rem; }
-      .rate { font-size: 0.6875rem; }
-
-      .reach {
-        left: calc(var(--pos) * 100%);
-        right: auto;
-        top: -0.5rem;
-        bottom: -0.5rem;
-        border-bottom: 0;
-        border-left: 2px dashed var(--bar-cyan);
-        transition: left 0.6s ease;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .reach { transition: none; }
-    }
-  </style>
 </head>
 <body>
-  <main class="page">
-    <h1 class="brand">ladder</h1>
+  <header id="site-header"></header>
 
-    <div class="screen">
-      <video id="video" controls playsinline></video>
-      <p class="notice" id="notice" role="status" hidden></p>
-    </div>
-
-    <aside class="ladder" id="ladder" aria-label="Video quality">
-      <div class="track" id="track">
-        <div class="reach" id="reach" hidden></div>
+  <main class="page" id="main">
+    <div class="watch">
+      <div class="watch-main">
+        <div class="player">
+          <video id="video" controls playsinline></video>
+          <button class="quality-chip" id="quality" type="button" aria-haspopup="true" aria-expanded="false"
+                  aria-controls="ladder" hidden></button>
+          <div class="ladder" id="ladder" role="group" aria-label="Video quality" hidden></div>
+          <p class="player-notice" id="player-notice" role="status" hidden></p>
+        </div>
+        <h1 class="watch-title" id="title"></h1>
+        <div class="watch-bar" id="bar"></div>
+        <section class="description" id="description" aria-label="About this video"></section>
       </div>
-      <dl class="legend">
-        <div><dt><span class="key"></span>Playing</dt><dd id="playing">–</dd></div>
-        <div><dt><span class="key key-reach"></span>Your connection</dt><dd id="speed">–</dd></div>
-      </dl>
-      <button class="auto" id="auto" type="button" aria-pressed="true">Auto</button>
-    </aside>
-
-    <p class="caption" id="caption">
-      The player times every segment it downloads. The dashed line is the speed it
-      measured, and it plays the highest rung below that line. Click a rung to hold
-      that quality; Auto lets the player choose again.
-    </p>
+      <aside class="watch-side" id="side" aria-label="Up next"></aside>
+    </div>
   </main>
 
-  <script>
-    const video = document.getElementById('video');
-    const notice = document.getElementById('notice');
-    const track = document.getElementById('track');
-    const reach = document.getElementById('reach');
-    const auto = document.getElementById('auto');
-    const playingOut = document.getElementById('playing');
-    const speedOut = document.getElementById('speed');
+  <script type="module">
+    const { el, icon, avatar, api, header, views, number, count, ago, longDate, loginUrl, notice,
+            thumbnail, popover, VISIBILITY } = Ladder;
 
+    const main = document.getElementById('main');
     const id = new URLSearchParams(location.search).get('id');
-    const src = `/api/v1/videos/${encodeURIComponent(id)}/master.m3u8`;
+    const user = await header();
 
-    function show(message) {
-      notice.textContent = message;
-      notice.hidden = false;
+    let video = null;
+    try {
+      if (id) video = await api('GET', '/api/v1/videos/' + encodeURIComponent(id));
+    } catch (error) {
+      if (error.status !== 404 && error.status !== 400) {
+        notice(main, 'Something went wrong', 'The video couldn’t be loaded. Try again in a moment.',
+          el('button', { class: 'btn', type: 'button', onclick: () => location.reload() }, 'Try again'));
+        video = undefined;
+      }
+    }
+    if (video === null) {
+      // 404 covers "doesn't exist", "private" and "still processing" alike, on purpose.
+      notice(main, 'This video isn’t available', 'It may be private, still processing, or the link may be wrong.',
+        el('a', { class: 'btn', href: '/' }, 'Go to the home page'));
+    } else if (video) {
+      render(video);
     }
 
-    function mbps(bitsPerSecond) {
-      return (bitsPerSecond / 1e6).toFixed(1) + ' Mb/s';
+    function render(video) {
+      const handle = video.channel.channelHandle;
+      const channelUrl = '/channel.html?handle=' + encodeURIComponent(handle);
+      const owns = !!user && user.channels.some(c => c.channelId === video.channel.channelId);
+      document.title = video.title + ' - ladder';
+      document.getElementById('title').textContent = video.title;
+
+      // ---- channel, subscribe, like/dislike, copy link
+      const subscribers = el('span', { text: count(video.channel.subscriberCount, 'subscriber', 'subscribers') });
+      const owner = el('div', { class: 'owner' },
+        el('a', { class: 'owner-link', href: channelUrl },
+          avatar(video.channel.channelName, handle, 'lg'),
+          el('div', { class: 'owner-text' }, el('strong', { text: video.channel.channelName }), subscribers)));
+
+      const subscribe = el('button', { class: 'btn btn-primary subscribe', type: 'button', 'aria-pressed': 'false' }, 'Subscribe');
+      const paintSubscribe = on => {
+        subscribe.setAttribute('aria-pressed', String(on));
+        subscribe.classList.toggle('btn-primary', !on);
+        subscribe.textContent = on ? 'Subscribed' : 'Subscribe';
+      };
+      subscribe.addEventListener('click', async () => {
+        if (!user) return void (location.href = loginUrl());
+        const on = subscribe.getAttribute('aria-pressed') === 'true';
+        subscribe.disabled = true;
+        try {
+          const result = await api(on ? 'DELETE' : 'PUT', `/api/v1/channels/${encodeURIComponent(handle)}/subscription`);
+          paintSubscribe(result.subscribed);
+          subscribers.textContent = count(result.subscriberCount, 'subscriber', 'subscribers');
+        } catch (error) {
+          if (error.status === 401) location.href = loginUrl();
+        } finally {
+          subscribe.disabled = false;
+        }
+      });
+      owner.append(owns ? el('a', { class: 'btn', href: channelUrl }, 'Manage videos') : subscribe);
+
+      let mine = video.myReaction;
+      const likes = el('span');
+      const dislikes = el('span');
+      const like = el('button', { class: 'btn', type: 'button', 'aria-label': 'Like' }, icon('like'), likes);
+      const dislike = el('button', { class: 'btn', type: 'button', 'aria-label': 'Dislike' }, icon('dislike'), dislikes);
+      const paintReactions = state => {
+        mine = state.myReaction;
+        like.setAttribute('aria-pressed', String(mine === 'LIKE'));
+        dislike.setAttribute('aria-pressed', String(mine === 'DISLIKE'));
+        likes.textContent = number(state.likeCount);
+        dislikes.textContent = number(state.dislikeCount);
+      };
+      paintReactions(video);
+      const react = async kind => {
+        if (!user) return void (location.href = loginUrl());
+        const undo = mine === kind; // pressing the active one takes it back
+        like.disabled = dislike.disabled = true;
+        try {
+          paintReactions(await api(undo ? 'DELETE' : 'PUT', `/api/v1/videos/${video.videoId}/reaction`,
+            undo ? {} : { json: { reaction: kind } }));
+        } catch (error) {
+          if (error.status === 401) location.href = loginUrl();
+        } finally {
+          like.disabled = dislike.disabled = false;
+        }
+      };
+      like.addEventListener('click', () => react('LIKE'));
+      dislike.addEventListener('click', () => react('DISLIKE'));
+
+      const copyLabel = el('span', { text: 'Copy link' });
+      const copy = el('button', { class: 'btn', type: 'button' }, icon('link'), copyLabel);
+      copy.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(location.origin + '/watch.html?id=' + video.videoId);
+          copyLabel.textContent = 'Copied';
+        } catch {
+          copyLabel.textContent = 'Couldn’t copy';
+        }
+        setTimeout(() => { copyLabel.textContent = 'Copy link'; }, 2000);
+      });
+
+      document.getElementById('bar').append(owner,
+        el('div', { class: 'actions' }, el('div', { class: 'reactions' }, like, dislike), copy));
+
+      // ---- description box
+      const viewCount = el('span', { text: views(video.viewCount) });
+      const visibility = video.visibility !== 'PUBLIC'
+        ? el('span', { class: 'badge' }, icon(video.visibility === 'PRIVATE' ? 'lock' : 'unlisted', 14),
+            VISIBILITY[video.visibility].label)
+        : null;
+      const text = el('p', { class: 'description-text clamped', text: video.description || '' });
+      const description = document.getElementById('description');
+      description.append(
+        el('div', { class: 'description-meta' }, viewCount, el('span', { text: longDate(video.createdAt) }), visibility),
+        text);
+      requestAnimationFrame(() => {
+        if (text.scrollHeight > text.clientHeight + 2) {
+          const toggle = el('button', { class: 'link-btn', type: 'button', 'aria-expanded': 'false' }, 'Show more');
+          toggle.addEventListener('click', () => {
+            const open = text.classList.toggle('clamped') === false;
+            toggle.textContent = open ? 'Show less' : 'Show more';
+            toggle.setAttribute('aria-expanded', String(open));
+          });
+          description.append(toggle);
+        }
+      });
+
+      // ---- up next: this channel's other videos first, then the rest of the feed
+      Promise.all([
+        api('GET', `/api/v1/channels/${encodeURIComponent(handle)}?limit=13`).catch(() => null),
+        api('GET', '/api/v1/videos?limit=13').catch(() => null),
+      ]).then(([channel, feed]) => {
+        if (channel) paintSubscribe(channel.subscribed);
+        const seen = new Set([video.videoId]);
+        const next = [...(channel ? channel.videos.items : []), ...(feed ? feed.items : [])]
+          .filter(item => item.status === 'READY' && !seen.has(item.videoId) && seen.add(item.videoId))
+          .slice(0, 12);
+        const side = document.getElementById('side');
+        if (!next.length) return;
+        side.append(el('h2', { class: 'side-title', text: 'Up next' }));
+        for (const item of next) {
+          side.append(el('a', { class: 'compact', href: '/watch.html?id=' + item.videoId }, thumbnail(item),
+            el('div', { class: 'card-text' },
+              el('h3', { class: 'card-title', text: item.title }),
+              el('span', { class: 'card-sub', text: item.channelName }),
+              el('span', { class: 'card-sub', text: views(item.viewCount) + ' · ' + ago(item.createdAt) }))));
+        }
+      });
+
+      startPlayer(video, viewCount);
     }
 
-    // The master playlist has no RESOLUTION attribute, so hls.js doesn't know
-    // heights. The rung's name is in its playlist URL instead: ".../480p/playlist.m3u8".
+    // ---------------------------------------------------------------- player
+
+    function startPlayer(video, viewCount) {
+      const element = document.getElementById('video');
+      const chip = document.getElementById('quality');
+      const ladder = document.getElementById('ladder');
+      const playerNotice = document.getElementById('player-notice');
+      const src = `/api/v1/videos/${video.videoId}/master.m3u8`;
+      if (video.thumbnailUrl) element.poster = video.thumbnailUrl;
+
+      const fail = message => {
+        playerNotice.textContent = message;
+        playerNotice.hidden = false;
+        chip.hidden = true;
+        ladder.hidden = true;
+      };
+
+      // One view per playback start; the server dedupes per viewer for 30 minutes anyway.
+      let counted = false;
+      element.addEventListener('playing', async () => {
+        if (counted) return;
+        counted = true;
+        try {
+          viewCount.textContent = views((await api('POST', `/api/v1/videos/${video.videoId}/view`)).viewCount);
+        } catch {
+          // A view that didn't count is not worth bothering the viewer about.
+        }
+      });
+
+      if (window.Hls && Hls.isSupported()) {
+        hlsPlayer(element, src, chip, ladder, fail);
+      } else if (element.canPlayType('application/vnd.apple.mpegurl')) {
+        element.src = src; // iOS Safari: native HLS picks the quality itself, no ladder to show
+      } else {
+        fail('This browser can’t play HLS video.');
+      }
+    }
+
+    // The master playlist has no RESOLUTION attribute, so the rung's name comes
+    // from its playlist URL: ".../480p/playlist.m3u8".
     function labelOf(level, index) {
       const uri = level.uri || [].concat(level.url)[0] || '';
       const match = uri.match(/\/(\d+p)\/playlist\.m3u8/);
       return match ? match[1] : level.height ? level.height + 'p' : 'Rung ' + (index + 1);
     }
 
-    if (!id) {
-      document.getElementById('ladder').hidden = true;
-      show('Add a video id to the address to watch, like watch.html?id=…');
-    } else if (window.Hls && Hls.isSupported()) {
-      play();
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // iOS Safari plays HLS natively but hides rung switches from the page.
-      document.getElementById('ladder').hidden = true;
-      document.getElementById('caption').textContent =
-        'This browser plays HLS natively and picks the quality itself, so the ladder isn\'t shown.';
-      video.src = src;
-    } else {
-      show('This browser can\'t play HLS video.');
-    }
+    const mbps = bits => (bits / 1e6).toFixed(1) + ' Mb/s';
 
-    function play() {
+    function hlsPlayer(element, src, chip, ladder, fail) {
       const hls = new Hls();
-      let rungs = [];
       let labels = [];
-      let scale = null;
-      let recoveredOnce = false;
+      let rates = [];
+      let playing = -1;
+      let held = -1;
+      let estimate = null;
+      let recovered = false;
 
-      function renderHeld(held) {
-        auto.setAttribute('aria-pressed', String(held === -1));
-        rungs.forEach((rung, i) => rung.setAttribute('aria-pressed', String(i === held)));
-      }
+      popover(chip, ladder);
+
+      const paint = () => {
+        const current = playing >= 0 ? labels[playing] : '';
+        chip.replaceChildren(icon('ladder', 16), `${current} · ${held >= 0 ? 'Held' : 'Auto'}`);
+        chip.setAttribute('aria-label', `Video quality: ${current || 'loading'}, ${held >= 0 ? 'held' : 'automatic'}`);
+
+        // Highest rung first. The dashed "your connection" line sits between the
+        // rungs it can't carry and the ones it can: the player climbs to the
+        // highest rung below it.
+        const rows = [el('div', { class: 'ladder-title', text: 'Quality' })];
+        let marked = estimate === null;
+        for (let i = rates.length - 1; i >= 0; i--) {
+          if (!marked && rates[i] <= estimate) {
+            rows.push(el('div', { class: 'reach', text: 'Your connection ' + mbps(estimate) }));
+            marked = true;
+          }
+          const rung = el('button', {
+            class: 'rung' + (i === playing ? ' playing' : ''), type: 'button', 'aria-pressed': String(i === held),
+            // Wider type for more bits: the width axis carries the bitrate.
+            onclick: () => { hls.nextLevel = i; held = i; paint(); },
+          }, el('span', { class: 'res', style: `font-stretch:${75 + (50 * i) / Math.max(1, rates.length - 1)}%`, text: labels[i] }),
+             el('span', { class: 'rate', text: mbps(rates[i]) }));
+          rows.push(rung);
+        }
+        if (!marked) rows.push(el('div', { class: 'reach', text: 'Your connection ' + mbps(estimate) }));
+        rows.push(el('button', {
+          class: 'ladder-auto', type: 'button', 'aria-pressed': String(held === -1),
+          onclick: () => { hls.nextLevel = -1; held = -1; paint(); },
+        }, el('span', { text: 'Auto' }), el('span', { text: 'Plays the highest rung under your connection' })));
+        ladder.replaceChildren(...rows);
+      };
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-        const rates = data.levels.map(level => level.bitrate);
-        // Log scale: each rung roughly doubles the bitrate, so a linear axis
-        // would crush 240p and 480p together at the bottom.
-        const lo = Math.min(...rates) / 1.5;
-        const hi = Math.max(...rates) * 2.2;
-        scale = b => Math.min(1, Math.max(0, Math.log(b / lo) / Math.log(hi / lo)));
-
         labels = data.levels.map(labelOf);
-        rungs = data.levels.map((level, i) => {
-          const rung = document.createElement('button');
-          rung.type = 'button';
-          rung.className = 'rung';
-          rung.style.setProperty('--pos', scale(level.bitrate));
-          // Wider type for more bits: 75% for the lowest rung up to 125% for the top.
-          rung.style.setProperty('--stretch', 75 + 50 * i / Math.max(1, data.levels.length - 1) + '%');
-
-          const res = document.createElement('span');
-          res.className = 'res';
-          res.textContent = labels[i];
-          const rate = document.createElement('span');
-          rate.className = 'rate';
-          rate.textContent = mbps(level.bitrate);
-          rung.append(res, rate);
-
-          // nextLevel, not currentLevel: switch at the next segment boundary instead
-          // of flushing the buffer, which freezes playback while a whole segment
-          // downloads at the new quality.
-          rung.addEventListener('click', () => {
-            hls.nextLevel = i;
-            renderHeld(i);
-          });
-          track.append(rung);
-          return rung;
-        });
-        renderHeld(-1);
+        rates = data.levels.map(level => level.bitrate);
+        chip.hidden = false;
+        paint();
       });
-
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-        rungs.forEach((rung, i) => {
-          rung.classList.toggle('is-playing', i === data.level);
-          rung.toggleAttribute('aria-current', i === data.level);
-        });
-        playingOut.textContent = labels[data.level];
+        playing = data.level;
+        paint();
       });
-
       hls.on(Hls.Events.FRAG_LOADED, () => {
-        const estimate = hls.bandwidthEstimate;
-        if (!scale || !(estimate > 0)) return;
-        reach.style.setProperty('--pos', scale(estimate));
-        reach.hidden = false;
-        speedOut.textContent = mbps(estimate);
+        if (hls.bandwidthEstimate > 0) {
+          estimate = hls.bandwidthEstimate;
+          // Not while the popover is open: rebuilding it every segment would
+          // pull keyboard focus out of it. It's current again next time it opens.
+          if (ladder.hidden) paint();
+        }
       });
-
       hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return; // hls.js retries non-fatal errors itself
+        if (!data.fatal) return; // hls.js retries those itself
         const code = data.response && data.response.code;
-
-        if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR && code === 404) {
-          show('No playable video with this id. If you just uploaded it, it may still be processing.');
-        } else if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR && code === 0) {
-          // Status 0 is the browser hiding a blocked cross-origin response.
-          show(`Video segments were blocked by the browser. Check that storage allows the origin ${location.origin} (ladder.storage.cors-origin).`);
-        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recoveredOnce) {
-          recoveredOnce = true;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && !recovered) {
+          recovered = true;
           hls.recoverMediaError();
           return;
+        }
+        if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR && code === 0) {
+          // Status 0 = the browser hid a blocked cross-origin response.
+          fail(`Video segments were blocked by the browser. Check that storage allows the origin ${location.origin} (ladder.storage.cors-origin).`);
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          show('This video couldn\'t be decoded.');
+          fail('This video couldn’t be decoded.');
         } else {
-          show('Lost the connection to the video server. Reload the page to try again.');
+          fail('Lost the connection to the video server. Reload the page to try again.');
         }
         hls.destroy();
       });
 
-      auto.addEventListener('click', () => {
-        hls.nextLevel = -1;
-        renderHeld(-1);
-      });
-
       hls.loadSource(src);
-      hls.attachMedia(video);
+      hls.attachMedia(element);
     }
   </script>
 </body>

@@ -36,7 +36,11 @@ public class StorageConfig {
                 .bucket(props.bucket())
                 .config(new CORSConfiguration(List.of(new CORSConfiguration.CORSRule(
                         List.of("*"),                    // allowedHeaders
-                        List.of("GET", "HEAD"),          // allowedMethods: players only read
+                        // GET/HEAD: the player reads segments. PUT: the upload page
+                        // sends the file straight to storage with the presigned URL,
+                        // so the bytes never pass through the API. Only a signed
+                        // URL can PUT; CORS just lets the browser make the call.
+                        List.of("GET", "HEAD", "PUT"),
                         List.of(props.corsOrigin()),     // allowedOrigins
                         List.of(),                       // exposeHeaders
                         null,                            // id

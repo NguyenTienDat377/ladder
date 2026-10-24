@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in - ladder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230f0f0f'/%3E%3Cpath d='M8 4v16M16 4v16M8 8h8M8 12h8M8 16h8' stroke='%23f5c400' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js"></script>
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page">
+    <div class="panel">
+      <h1 id="heading">Sign in</h1>
+      <p class="panel-lead" id="lead">Welcome back. Sign in to subscribe, like and upload.</p>
+
+      <div class="tabs" role="tablist" aria-label="Sign in or create an account">
+        <button class="tab" role="tab" id="tab-in" aria-controls="form-in" aria-selected="true" type="button">Sign in</button>
+        <button class="tab" role="tab" id="tab-up" aria-controls="form-up" aria-selected="false" type="button" tabindex="-1">Create account</button>
+      </div>
+
+      <form class="form" id="form-in" role="tabpanel" aria-labelledby="tab-in" novalidate>
+        <p class="form-error" id="error-in" role="alert" hidden></p>
+        <div class="field">
+          <label for="in-email">Email</label>
+          <input class="input" id="in-email" name="email" type="email" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="in-password">Password</label>
+          <input class="input" id="in-password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn btn-primary btn-lg" type="submit">Sign in</button>
+      </form>
+
+      <form class="form" id="form-up" role="tabpanel" aria-labelledby="tab-up" hidden novalidate>
+        <p class="form-error" id="error-up" role="alert" hidden></p>
+        <div class="field">
+          <label for="up-name">Name</label>
+          <input class="input" id="up-name" name="userName" autocomplete="name" maxlength="100" required>
+          <span class="hint">Also your channel's name. You can't change it yet.</span>
+        </div>
+        <div class="field">
+          <label for="up-handle">Handle</label>
+          <input class="input" id="up-handle" name="handle" autocomplete="username" pattern="[a-z0-9_]{3,50}"
+                 maxlength="50" required aria-describedby="up-handle-hint">
+          <span class="hint" id="up-handle-hint">Your channel's address: 3 to 50 lowercase letters, digits or underscores.</span>
+        </div>
+        <div class="field">
+          <label for="up-email">Email</label>
+          <input class="input" id="up-email" name="email" type="email" autocomplete="email" maxlength="320" required>
+        </div>
+        <div class="field">
+          <label for="up-password">Password</label>
+          <input class="input" id="up-password" name="password" type="password" autocomplete="new-password"
+                 minlength="8" maxlength="72" required aria-describedby="up-password-hint">
+          <span class="hint" id="up-password-hint">At least 8 characters.</span>
+        </div>
+        <button class="btn btn-primary btn-lg" type="submit">Create account</button>
+      </form>
+    </div>
+  </main>
+
+  <script type="module">
+    const { api, login, header, safeNext } = Ladder;
+
+    const next = safeNext(new URLSearchParams(location.search).get('next'));
+    const user = await header();
+    if (user) location.replace(next); // already signed in
+
+    // ---- tabs
+    const tabs = { in: document.getElementById('tab-in'), up: document.getElementById('tab-up') };
+    const forms = { in: document.getElementById('form-in'), up: document.getElementById('form-up') };
+    const text = {
+      in: ['Sign in', 'Welcome back. Sign in to subscribe, like and upload.'],
+      up: ['Create your account', 'One account, one channel. It takes a minute.'],
+    };
+    function select(which) {
+      for (const key of ['in', 'up']) {
+        const on = key === which;
+        tabs[key].setAttribute('aria-selected', String(on));
+        tabs[key].tabIndex = on ? 0 : -1;
+        forms[key].hidden = !on;
+      }
+      document.getElementById('heading').textContent = text[which][0];
+      document.getElementById('lead').textContent = text[which][1];
+    }
+    tabs.in.addEventListener('click', () => select('in'));
+    tabs.up.addEventListener('click', () => select('up'));
+    // Arrow keys move between tabs, as screen-reader users expect of a tablist.
+    for (const tab of Object.values(tabs)) {
+      tab.addEventListener('keydown', event => {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          const target = tab === tabs.in ? 'up' : 'in';
+          select(target);
+          tabs[target].focus();
+        }
+      });
+    }
+    if (location.hash === '#create') select('up');
+
+    function showError(form, message) {
+      const box = form.querySelector('.form-error');
+      box.textContent = message;
+      box.hidden = !message;
+    }
+
+    async function submit(form, work) {
+      showError(form, '');
+      if (!form.reportValidity()) return;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        await work(Object.fromEntries(new FormData(form)));
+        location.href = next;
+      } catch (error) {
+        showError(form, error.message);
+        button.disabled = false;
+      }
+    }
+
+    forms.in.addEventListener('submit', event => {
+      event.preventDefault();
+      submit(forms.in, async ({ email, password }) => {
+        try {
+          await login(email, password);
+        } catch (error) {
+          throw new Error(error.status === 401
+            ? 'That email and password don’t match an account.'
+            : 'Signing in didn’t work. Try again in a moment.');
+        }
+      });
+    });
+
+    forms.up.addEventListener('submit', event => {
+      event.preventDefault();
+      submit(forms.up, async fields => {
+        if (new TextEncoder().encode(fields.password).length > 72) {
+          throw new Error('That password is too long: at most 72 bytes, and accented letters count for 2 or 3.');
+        }
+        try {
+          await api('POST', '/api/v1/auth/register', { json: fields });
+        } catch (error) {
+          throw new Error(
+            error.status === 409 ? 'That email or handle is already taken.'
+            : error.status === 400 ? 'Check the form: the handle needs 3 to 50 lowercase letters, digits or underscores, and the password at least 8 characters.'
+            : 'Creating the account didn’t work. Try again in a moment.');
+        }
+        await login(fields.email, fields.password);
+      });
+    });
+  </script>
+</body>
+</html>

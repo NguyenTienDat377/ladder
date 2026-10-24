@@ -4,7 +4,7 @@ An adaptive-bitrate video platform, built to understand how one actually works.
 
 A *bitrate ladder* is the set of encoded renditions a video is transcoded into — 1080p, 720p, 480p, 240p — so a player can step up or down the rungs as network conditions change. That mechanism is the core of this project, and the reason for its name.
 
-**Status: building.** Upload → transcode works end to end: a video goes in, four HLS renditions and a master playlist come out in object storage, and the video becomes `READY`. Serving it to a player, auth and everything around them are not built yet. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
+**Status: building.** The whole path works end to end in the browser: sign up, upload, transcode into four renditions, watch with a quality ladder, subscribe, like, and browse a feed and channel pages. Search isn't built, and the gaps below are real. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
 
 ---
 
@@ -142,6 +142,14 @@ Subscribing and liking are deliberate clicks, not a firehose, so they take the o
 
 ---
 
+### The frontend is plain static pages
+
+No framework and no build step: `index.html`, `watch.html`, `channel.html`, `login.html` and `upload.html` under [`static/`](src/main/resources/static/), served by Spring itself, sharing one stylesheet and one small script ([`app.js`](src/main/resources/static/app.js)). Being the same origin as the API is what makes the session cookie and CSRF protection simple: the cookie travels on its own, and the page copies the `XSRF-TOKEN` cookie into an `X-XSRF-TOKEN` header on every write. Anything a user typed (titles, names, descriptions) is put on the page as text, never as HTML.
+
+The upload page sends the file straight to storage with the presigned URL, with progress, then calls `/complete` and polls until the video is `READY`. The watch page's quality chip opens the ladder: every rung with its bitrate, a dashed line at the connection speed hls.js measured, and the option to hold one rung or go back to Auto.
+
+*Built.* Checked by driving a real browser through sign-up, upload, playback, subscribe and like; there are no automated browser tests yet, and nothing checks the layout on a real phone, only a 390px-wide window.
+
 ## Schema
 
 Ten tables, in two groups.
@@ -164,9 +172,7 @@ Listed so they read as decisions rather than oversights.
 - **Permission checks are uncached** — the check is three joins, running on nearly every authorized endpoint. The fix is resolving a user's permission set once and caching it in Redis or embedding it in JWT claims. The catch: both make revocation asynchronous, so a moderator stripped of their role keeps it until the token or cache entry expires. For someone removed for abuse, that window matters. Mitigations are short TTLs, a token-version column, or a denylist consulted on sensitive operations only. This is an application-layer problem the schema doesn't solve.
 - **No partitioning** on any high-volume table.
 - **No resumable upload** — a 2GB upload dying at 90% currently restarts from zero. S3 multipart or the tus protocol is the fix.
-- **No playback yet** — videos reach `READY` with a master playlist, but there's no endpoint that hands a player a URL. This is the next step.
 - **Master playlist omits `RESOLUTION` and `CODECS`** — both optional. Encodes keep the source's aspect ratio, so the nominal 16:9 width would be wrong for vertical or 4:3 video; they need the worker to probe the real output first.
-- **No authentication** — [`DevSecurityConfig`](src/main/java/com/ladder/security/DevSecurityConfig.java) permits every request so the pipeline could be built first. Temporary; never to be deployed. The channel id currently comes from the request body.
 - **Queueing isn't atomic with the status change** — Postgres and RabbitMQ can't share a transaction. If publishing fails, the status is reverted so the client can retry; a crash *between* the two steps still strands the video in `PROCESSING`. The full fix is a transactional outbox table.
 - **Keyframe interval assumes 24fps** — on 30fps sources 48 frames is 1.6s, which doesn't divide 10s. Renditions still align with each other, but segments come out uneven. Fix: probe the frame rate and use `2 × fps`.
 - **No upscale guard** — a 480p upload still produces a "1080p" rendition, which is a blown-up 480p costing more bandwidth for nothing.
@@ -216,26 +222,11 @@ Needs Docker, a JDK (the toolchain is set in `build.gradle`) and `ffmpeg` on you
 
 `bootRun` keeps running for as long as the app does. If you start containers yourself, start all of them (`docker compose up -d`): Spring Boot skips its own startup when any service is already running.
 
-There's no sign-up yet, so seed one user and channel:
-
-```bash
-docker compose exec postgres psql -U ladder -d ladder -c "
-  INSERT INTO users (email, user_name, user_handle) VALUES ('me@example.com', 'Me', 'me');
-  INSERT INTO channels (user_id, channel_name, channel_handle)
-    SELECT user_id, 'My Channel', 'mychannel' FROM users WHERE user_handle = 'me';
-  SELECT channel_id FROM channels;"
-```
-
-Then upload and transcode a video:
-
-```bash
-curl -X POST localhost:8080/api/v1/videos -H 'Content-Type: application/json' \
-     -d '{"channelId":"<channel_id>","title":"First upload"}'      # -> {videoId, uploadUrl}
-curl -X PUT --upload-file video.mp4 "<uploadUrl>"
-curl -X POST localhost:8080/api/v1/videos/<videoId>/complete      # -> 202, renditions appear shortly
-```
+Then open http://localhost:8080, choose **Sign in → Create account**, and upload from the **Upload** button. Processing takes a minute or two for a short clip, and the page tells you when it's ready.
 
 No video handy? `ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=24:duration=30 -f lavfi -i sine=duration=30 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest video.mp4`
+
+The same thing from a terminal is the API: create the video (`POST /api/v1/videos`, which needs a login session and the CSRF header), `PUT` the file to the returned `uploadUrl`, then `POST /api/v1/videos/{id}/complete`.
 
 The storage console is at http://localhost:9001; the credentials are in `compose.yaml` (local development only).
 
