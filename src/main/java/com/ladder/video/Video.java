@@ -35,6 +35,12 @@ public class Video {
     @Column(nullable = false)
     private String visibility;
 
+    // Read-only: only the view-count flush writes this column, with an
+    // "x = x + n" statement. If JPA could write it, saving a Video loaded
+    // before a flush would overwrite the flushed views with its stale copy.
+    @Column(insertable = false, updatable = false)
+    private long viewCount;
+
     // Left out of INSERT/UPDATE so the column's DEFAULT now() applies;
     // otherwise Hibernate would send NULL and violate NOT NULL.
     @Column(insertable = false, updatable = false)

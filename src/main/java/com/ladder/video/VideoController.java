@@ -12,10 +12,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.ladder.video.dto.VideoCreateRequest;
 import com.ladder.video.dto.VideoCreateResponse;
+import com.ladder.video.dto.ViewCountResponse;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 
 
 @RestController
@@ -23,10 +24,19 @@ import org.springframework.web.bind.annotation.RequestParam;
 public class VideoController {
     private final PlaybackService playbackService;
     private final VideoService videoService;
+    private final ViewCountService viewCountService;
 
-    public VideoController(VideoService videoService, PlaybackService playbackService) {
+    public VideoController(VideoService videoService, PlaybackService playbackService,
+                           ViewCountService viewCountService) {
         this.videoService = videoService;
         this.playbackService = playbackService;
+        this.viewCountService = viewCountService;
+    }
+
+    // Viewer = client address until login exists; everyone behind one NAT counts as one.
+    @PostMapping("/{id}/view")
+    public ViewCountResponse recordView(@PathVariable UUID id, HttpServletRequest request) {
+        return new ViewCountResponse(viewCountService.recordView(id, request.getRemoteAddr()));
     }
 
     @PostMapping

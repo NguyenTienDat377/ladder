@@ -35,4 +35,12 @@ public interface VideoRepository extends JpaRepository<Video, UUID> {
     @Transactional
     @Query("update Video v set v.status = 'READY' where v.videoId = :id and v.status = 'PROCESSING'")
     int markReady(UUID id);
+
+    // Adds to the stored count in the database, never "set to N": the flush
+    // can't clobber views another flush added. Native because the field is
+    // mapped read-only, which JPQL updates don't accept.
+    @Modifying
+    @Transactional
+    @Query(nativeQuery = true, value = "UPDATE videos SET view_count = view_count + :delta WHERE video_id = :id")
+    int addViews(UUID id, long delta);
 }
