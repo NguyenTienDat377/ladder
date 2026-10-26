@@ -1,0 +1,22 @@
+# Transcode worker image.
+#
+# This is a SEPARATE image from the API. The API never invokes ffmpeg, so
+# shipping the binary there would add ~200MB and a nontrivial CVE surface to a
+# container that has no use for it. Splitting also lets the two scale
+# independently -- transcode capacity is CPU-bound and bursty, API capacity is
+# not, and you do not want to add API replicas just to clear a transcode
+# backlog.
+
+FROM eclipse-temurin:25-jre-jammy
+
+# Run as non-root. The worker executes a subprocess on user-supplied media --
+# a decoder bug in ffmpeg on a malicious upload is a real (if unlikely) path to
+# code execution, and root makes the difference between a contained incident
+# and a compromised host.
+RUN useradd --system --create-home --uid 10001 worker
+USER worker
+
+WORKDIR /app
+COPY --chown=worker:worker build/libs/*.jar app.jar
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

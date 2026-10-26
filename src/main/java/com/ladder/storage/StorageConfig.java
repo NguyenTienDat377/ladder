@@ -5,6 +5,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.SetBucketCorsArgs;
 import io.minio.messages.CORSConfiguration;
+import io.minio.credentials.IamAwsProvider;
 
 import java.util.List;
 
@@ -19,9 +20,10 @@ public class StorageConfig {
 
     @Bean
     MinioClient minioClient(StorageProperties props) {
-        return MinioClient.builder()
-                .endpoint(props.endpoint())
-                .credentials(props.accessKey(), props.secretKey())
+        MinioClient.Builder builder = MinioClient.builder().endpoint(props.endpoint());
+        return (props.accessKey() == null || props.accessKey().isBlank() 
+                ? builder.credentialsProvider(new IamAwsProvider(null, null))
+                : builder.credentials(props.accessKey(), props.secretKey()))
                 .build();
     }
 

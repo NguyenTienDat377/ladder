@@ -7,7 +7,7 @@
 # not, and you do not want to add API replicas just to clear a transcode
 # backlog.
 
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:25-jre-jammy
 
 # ffmpeg is a native binary, not a Java dependency -- it is installed here
 # rather than declared in build.gradle. That is the whole trade-off of the
