@@ -4,7 +4,7 @@ An adaptive-bitrate video platform, built to understand how one actually works.
 
 A *bitrate ladder* is the set of encoded renditions a video is transcoded into — 1080p, 720p, 480p, 240p — so a player can step up or down the rungs as network conditions change. That mechanism is the core of this project, and the reason for its name.
 
-**Status: building.** The whole path works end to end in the browser: sign up, upload, transcode into four renditions, watch with a quality ladder, subscribe, like, and browse a feed and channel pages. Search isn't built, and the gaps below are real. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
+**Status: building.** The whole path works end to end in the browser: sign up, upload, transcode into four renditions, watch with a quality ladder, subscribe, like, search, and browse a feed and channel pages. The gaps below are real. Claims below are marked *designed* or *built* — nothing is marked built until there's code to point at.
 
 ---
 

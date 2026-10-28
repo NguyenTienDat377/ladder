@@ -156,7 +156,7 @@ public class CatalogService {
                 request.title(), request.description(), request.visibility(), videoId);
     }
 
-    private static final RowMapper<Item> ITEM = (rs, row) -> {
+    static final RowMapper<Item> ITEM = (rs, row) -> {
         UUID id = rs.getObject("video_id", UUID.class);
         String status = rs.getString("status");
         return new Item(id, rs.getString("title"),
@@ -182,7 +182,7 @@ public class CatalogService {
         return new VideoPage(items, items.get(size - 1).videoId());
     }
 
-    private static int clamp(int limit) {
+    static int clamp(int limit) {
         return Math.max(1, Math.min(limit, MAX_LIMIT));
     }
 

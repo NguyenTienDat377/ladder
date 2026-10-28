@@ -64,6 +64,26 @@ h1, h2, h3, p { margin: 0; }
 }
 .brand svg { color: var(--accent); }
 
+.search-bar {
+  flex: 1; max-width: 520px;
+  display: flex; align-items: center;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); overflow: hidden;
+}
+.search-bar:focus-within { border-color: var(--accent); }
+.search-input {
+  flex: 1; min-width: 0; height: 40px; padding: 0 16px;
+  border: 0; background: none; color: var(--text); font: inherit; font-size: 14px;
+}
+.search-input:focus { outline: none; }
+.search-input::placeholder { color: var(--muted); }
+.search-btn {
+  flex: none; display: inline-grid; place-items: center;
+  width: 48px; height: 40px; border: 0; border-left: 1px solid var(--line);
+  background: var(--chip); color: var(--text); cursor: pointer;
+}
+.search-btn:hover { background: var(--chip-hover); }
+
 .header-actions { display: flex; align-items: center; gap: 10px; }
 
 .account { position: relative; }
@@ -141,6 +161,7 @@ button.avatar { border: 0; cursor: pointer; font-family: inherit; width: 40px; h
 .side-note { padding: 4px 12px; color: var(--muted); font-size: 14px; }
 .side-note a { color: var(--accent); }
 .main { flex: 1; min-width: 0; }
+.page-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; }
 
 @media (max-width: 900px) {
   .sidebar { display: none; }

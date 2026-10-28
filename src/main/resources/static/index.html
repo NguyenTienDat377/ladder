@@ -17,7 +17,7 @@
   <div class="page with-sidebar">
     <aside class="sidebar" id="sidebar" aria-label="Navigation"></aside>
     <main class="main" id="main">
-      <h1 class="visually-hidden">Latest videos</h1>
+      <h1 class="visually-hidden" id="heading">Latest videos</h1>
       <div class="grid" id="grid" aria-busy="true"></div>
       <div class="more" id="more"></div>
     </main>
@@ -28,12 +28,15 @@
 
     const user = await header();
     const main = document.getElementById('main');
+    const heading = document.getElementById('heading');
     const grid = document.getElementById('grid');
     const more = document.getElementById('more');
+    const query = (new URLSearchParams(location.search).get('q') || '').trim();
 
     // ---- sidebar: home, your channel, the channels you subscribe to
     const sidebar = document.getElementById('sidebar');
-    sidebar.append(el('a', { class: 'side-link', href: '/', 'aria-current': 'page' }, icon('home'), el('span', { text: 'Home' })));
+    sidebar.append(el('a', { class: 'side-link', href: '/', 'aria-current': query ? false : 'page' },
+      icon('home'), el('span', { text: 'Home' })));
     const mine = user && user.channels[0];
     if (mine) {
       sidebar.append(el('a', { class: 'side-link', href: '/channel.html?handle=' + encodeURIComponent(mine.channelHandle) },
@@ -54,27 +57,49 @@
       }).catch(() => {});
     }
 
-    // ---- the feed: newest public videos, "Show more" asks for the page older than the last one
-    async function load(before) {
+    // ---- either search results (when ?q= is present) or the newest-first home feed
+    if (query) {
+      document.title = query + ' - ladder';
+      heading.className = 'page-title';
+      heading.textContent = `Results for “${query}”`;
+    }
+
+    async function loadFeed(before) {
       const page = await api('GET', '/api/v1/videos?limit=24' + (before ? '&before=' + before : ''));
       grid.append(...page.items.map(item => videoCard(item)));
       more.replaceChildren(page.nextBefore
         ? el('button', { class: 'btn btn-lg', type: 'button', onclick: event => {
             const button = event.currentTarget; // null once the handler has returned
             button.disabled = true;
-            load(page.nextBefore).catch(() => { button.disabled = false; });
+            loadFeed(page.nextBefore).catch(() => { button.disabled = false; });
+          } }, 'Show more')
+        : '');
+      return page;
+    }
+
+    async function loadSearch(offset = 0) {
+      const page = await api('GET', `/api/v1/videos/search?q=${encodeURIComponent(query)}&limit=24&offset=${offset}`);
+      grid.append(...page.items.map(item => videoCard(item)));
+      more.replaceChildren(page.nextOffset !== null && page.nextOffset !== undefined
+        ? el('button', { class: 'btn btn-lg', type: 'button', onclick: event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            loadSearch(page.nextOffset).catch(() => { button.disabled = false; });
           } }, 'Show more')
         : '');
       return page;
     }
 
     try {
-      const first = await load();
+      const first = query ? await loadSearch() : await loadFeed();
       grid.removeAttribute('aria-busy');
       if (!first.items.length) {
-        main.replaceChildren(emptyState('Nothing to watch yet', 'Public videos show up here as soon as they finish processing.',
-          user ? el('a', { class: 'btn btn-primary', href: '/upload.html' }, icon('plus'), 'Upload the first one')
-               : el('a', { class: 'btn btn-primary', href: loginUrl() }, 'Sign in to upload')));
+        main.replaceChildren(query
+          ? emptyState('No videos found', `Nothing matched “${query}”. Try different words or check the spelling.`,
+              el('a', { class: 'btn', href: '/' }, 'Back to home'))
+          : emptyState('Nothing to watch yet', 'Public videos show up here as soon as they finish processing.',
+              user ? el('a', { class: 'btn btn-primary', href: '/upload.html' }, icon('plus'), 'Upload the first one')
+                   : el('a', { class: 'btn btn-primary', href: loginUrl() }, 'Sign in to upload')));
       }
     } catch {
       notice(main, 'The videos couldn’t be loaded', 'Check that the server is running, then try again.',

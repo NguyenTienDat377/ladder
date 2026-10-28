@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ladder.security.CurrentUser;
+import com.ladder.video.dto.SearchPage;
 import com.ladder.video.dto.VideoCreateRequest;
 import com.ladder.video.dto.VideoDetailsResponse;
 import com.ladder.video.dto.VideoPage;
@@ -39,13 +40,16 @@ public class VideoController {
     private final VideoService videoService;
     private final ViewCountService viewCountService;
     private final CatalogService catalog;
+    private final SearchService searchService;
 
     public VideoController(VideoService videoService, PlaybackService playbackService,
-                           ViewCountService viewCountService, CatalogService catalog) {
+                           ViewCountService viewCountService, CatalogService catalog,
+                           SearchService searchService) {
         this.videoService = videoService;
         this.playbackService = playbackService;
         this.viewCountService = viewCountService;
         this.catalog = catalog;
+        this.searchService = searchService;
     }
 
     // The home feed. "before" = the nextBefore of the previous page; absent = the first page.
@@ -53,6 +57,13 @@ public class VideoController {
     public VideoPage feed(@RequestParam(required = false) UUID before,
                           @RequestParam(defaultValue = "" + CatalogService.DEFAULT_LIMIT) int limit) {
         return catalog.feed(before, limit);
+    }
+
+    @GetMapping("/search")
+    public SearchPage search(@RequestParam(defaultValue = "") String q,
+                             @RequestParam(defaultValue = "0") int offset,
+                             @RequestParam(defaultValue = "" + CatalogService.DEFAULT_LIMIT) int limit) {
+        return searchService.search(q, offset, limit);
     }
 
     @GetMapping("/{id}")

@@ -420,6 +420,115 @@ class CatalogTest {
                 .andExpect(jsonPath("$.videos.items[?(@.videoId=='" + processing + "')].thumbnailUrl").value((Object) null));
     }
 
+    @Test
+    void searchFindsByTitleDescriptionAndFuzzyTypoAndRanksTitleFirst() throws Exception {
+        UUID channel = newChannel();
+        UUID descOnly = seedVideo(channel, "READY", "PUBLIC", "Morning walk");
+        jdbc.update("UPDATE videos SET description = 'Talking about adaptive bitrate ladders' WHERE video_id = ?", descOnly);
+        UUID typoTitle = seedVideo(channel, "READY", "PUBLIC", "Adaptive bitrat ladder");
+        UUID exactTitle = seedVideo(channel, "READY", "PUBLIC", "Adaptive bitrate streaming");
+        seedVideo(channel, "READY", "PUBLIC", "Cooking pasta");
+
+        // Exact query "bitrate": exact title match (weight A + trigram 1.0) >
+        // fuzzy title match ("bitrat") > description-only match (weight B).
+        mvc.perform(get("/api/v1/videos/search").param("q", "bitrate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(3))
+                .andExpect(jsonPath("$.items[0].videoId").value(exactTitle.toString()))
+                .andExpect(jsonPath("$.items[1].videoId").value(typoTitle.toString()))
+                .andExpect(jsonPath("$.items[2].videoId").value(descOnly.toString()))
+                .andExpect(jsonPath("$.nextOffset").isEmpty());
+
+        // Typo query "bitrat": tsvector won't match "bitrate", so pg_trgm carries it.
+        mvc.perform(get("/api/v1/videos/search").param("q", "bitrat"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.videoId=='" + exactTitle + "')]").exists());
+    }
+
+    @Test
+    void searchHidesNonPublicAndUnfinishedVideos() throws Exception {
+        UUID channel = newChannel();
+        UUID shown = seedVideo(channel, "READY", "PUBLIC", "transcode pipeline");
+        seedVideo(channel, "READY", "PRIVATE", "transcode pipeline");
+        seedVideo(channel, "READY", "UNLISTED", "transcode pipeline");
+        seedVideo(channel, "PROCESSING", "PUBLIC", "transcode pipeline");
+        seedVideo(channel, "FAILED", "PUBLIC", "transcode pipeline");
+
+        mvc.perform(get("/api/v1/videos/search").param("q", "transcode"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].videoId").value(shown.toString()));
+    }
+
+    @Test
+    void searchTieBreaksByNewestFirstAndPagesWithOffset() throws Exception {
+        UUID channel = newChannel();
+        List<String> expected = Stream.of(1, 2, 3)
+                .map(i -> seedVideo(channel, "READY", "PUBLIC", "keyframes guide").toString())
+                .sorted(Comparator.reverseOrder())
+                .toList();
+
+        mvc.perform(get("/api/v1/videos/search").param("q", "keyframes").param("limit", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].videoId").value(expected.get(0)))
+                .andExpect(jsonPath("$.items[1].videoId").value(expected.get(1)))
+                .andExpect(jsonPath("$.nextOffset").value(2));
+
+        mvc.perform(get("/api/v1/videos/search").param("q", "keyframes").param("limit", "2").param("offset", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].videoId").value(expected.get(2)))
+                .andExpect(jsonPath("$.nextOffset").isEmpty());
+    }
+
+    @Test
+    void searchHandlesBlankSpecialSyntaxAndRejectsBadParameters() throws Exception {
+        UUID channel = newChannel();
+        seedVideo(channel, "READY", "PUBLIC", "hello world");
+
+        mvc.perform(get("/api/v1/videos/search").param("q", "   "))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(0))
+                .andExpect(jsonPath("$.nextOffset").isEmpty());
+
+        // Raw user punctuation that would crash to_tsquery() is harmless in websearch_to_tsquery().
+        mvc.perform(get("/api/v1/videos/search").param("q", "\"unclosed & ( ) ! :"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/v1/videos/search").param("q", "hello").param("offset", "-1"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/videos/search").param("q", "hello").param("offset", "1001"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/videos/search").param("q", "x".repeat(201)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void searchQueryIsShapedSoBothGinIndexesCanServeIt() {
+        // Every branch of an OR must be indexable for Postgres to build a
+        // BitmapOr plan; if any branch used a plain function call instead of an
+        // index operator, Postgres would have no choice but a sequential scan.
+        String plan = jdbc.execute((java.sql.Connection connection) -> {
+            try (var statement = connection.createStatement()) {
+                statement.execute("SET enable_seqscan = off");
+                try (var result = statement.executeQuery("""
+                        EXPLAIN SELECT v.video_id FROM videos v,
+                             websearch_to_tsquery('simple', 'ladder') AS tsq
+                        WHERE v.search_vector @@ tsq OR v.title % 'ladder' OR v.title %> 'ladder'""")) {
+                    StringBuilder text = new StringBuilder();
+                    while (result.next()) {
+                        text.append(result.getString(1)).append('\n');
+                    }
+                    return text.toString();
+                } finally {
+                    statement.execute("RESET enable_seqscan");
+                }
+            }
+        });
+        assertThat(plan).contains("videos_search_idx").contains("videos_title_trgm_idx");
+    }
+
     // Marks the video as having a thumbnail and makes the mocked storage return its bytes.
     private byte[] withThumbnail(UUID video) throws Exception {
         byte[] jpeg = {(byte) 0xFF, (byte) 0xD8, 1, 2, 3, (byte) 0xFF, (byte) 0xD9};

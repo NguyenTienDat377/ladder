@@ -125,6 +125,7 @@ window.Ladder = (() => {
     home: '<path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z"/>',
     channel: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/>',
     out: '<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   };
 
   function icon(name, size = 20) {
@@ -275,7 +276,22 @@ window.Ladder = (() => {
     const root = document.getElementById('site-header');
     root.className = 'site-header';
     const brand = el('a', { class: 'brand', href: '/' }, icon('ladder', 26), el('span', { text: 'ladder' }));
-    root.replaceChildren(brand);
+    const initialQuery = location.pathname === '/' || location.pathname === '/index.html'
+      ? (new URLSearchParams(location.search).get('q') || '').trim()
+      : '';
+    const input = el('input', {
+      class: 'search-input', type: 'search', name: 'q', value: initialQuery,
+      placeholder: 'Search videos', 'aria-label': 'Search videos', maxlength: '200',
+    });
+    const searchForm = el('form', {
+      class: 'search-bar', role: 'search', action: '/',
+      onsubmit: event => {
+        event.preventDefault();
+        const q = input.value.trim();
+        location.href = q ? '/?q=' + encodeURIComponent(q) : '/';
+      },
+    }, input, el('button', { class: 'search-btn', type: 'submit', 'aria-label': 'Search' }, icon('search', 18)));
+    root.replaceChildren(brand, searchForm);
     let user = null;
     try {
       user = await me();
